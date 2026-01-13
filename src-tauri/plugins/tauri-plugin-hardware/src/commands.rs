@@ -18,8 +18,15 @@ pub fn get_system_info() -> SystemInfo {
             }
 
             let vulkan_gpus = vulkan::get_vulkan_gpus();
+            log::info!("Vulkan GPU detection returned {} GPUs", vulkan_gpus.len());
 
             for gpu in vulkan_gpus {
+                log::info!(
+                    "Processing Vulkan GPU: {} (vendor: {:?}, uuid: {})",
+                    gpu.name,
+                    gpu.vendor,
+                    gpu.uuid
+                );
                 match gpu_map.get_mut(&gpu.uuid) {
                     // for existing NVIDIA GPUs, add Vulkan info
                     Some(nvidia_gpu) => {
@@ -29,6 +36,11 @@ pub fn get_system_info() -> SystemInfo {
                         gpu_map.insert(gpu.uuid.clone(), gpu);
                     }
                 }
+            }
+
+            log::info!("Total GPUs in system info: {}", gpu_map.len());
+            for (uuid, gpu) in &gpu_map {
+                log::info!("  GPU: {} (uuid: {}, vendor: {:?})", gpu.name, uuid, gpu.vendor);
             }
 
             let os_type = if cfg!(target_os = "windows") {

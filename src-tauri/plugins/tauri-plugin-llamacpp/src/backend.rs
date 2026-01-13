@@ -325,6 +325,12 @@ pub fn get_supported_features(
     cpu_extensions: Vec<String>,
     gpus: Vec<GpuInfo>,
 ) -> Result<SupportedFeatures, String> {
+    log::info!(
+        "get_supported_features called: os_type={}, gpus_count={}",
+        os_type,
+        gpus.len()
+    );
+
     let mut features = SupportedFeatures {
         avx: cpu_extensions.contains(&"avx".to_string()),
         avx2: cpu_extensions.contains(&"avx2".to_string()),
@@ -335,35 +341,49 @@ pub fn get_supported_features(
         vulkan: false,
     };
 
-    // https://docs.nvidia.com/deploy/cuda-compatibility/#cuda-11-and-later-defaults-to-minor-version-compatibility
-    let (min_cuda11_driver, min_cuda12_driver, min_cuda13_driver) = match os_type.as_str() {
-        "linux" => ("450.80.02", "525.60.13", "580"),
-        "windows" => ("452.39", "527.41", "580"),
-        _ => return Ok(features), // Other OS types don't support CUDA
-    };
-
-    // Check GPU features
-    for gpu_info in gpus {
-        let driver_version = &gpu_info.driver_version;
-
-        // Check CUDA support
-        if gpu_info.nvidia_info.is_some() {
-            if compare_versions(driver_version, min_cuda11_driver) >= 0 {
-                features.cuda11 = true;
-            }
-            if compare_versions(driver_version, min_cuda12_driver) >= 0 {
-                features.cuda12 = true;
-            }
-            if compare_versions(driver_version, min_cuda13_driver) >= 0 {
-                features.cuda13 = true;
-            }
-        }
-
-        // Check Vulkan support
+    // Check Vulkan support first (works on all platforms including macOS via MoltenVK)
+    for gpu_info in &gpus {
         if gpu_info.vulkan_info.is_some() {
+            log::info!("Vulkan GPU detected, enabling vulkan feature");
             features.vulkan = true;
+            break;
         }
     }
+
+    // CUDA driver version requirements (only applicable on Linux/Windows)
+    // https://docs.nvidia.com/deploy/cuda-compatibility/#cuda-11-and-later-defaults-to-minor-version-compatibility
+    let cuda_drivers = match os_type.as_str() {
+        "linux" => Some(("450.80.02", "525.60.13", "580")),
+        "windows" => Some(("452.39", "527.41", "580")),
+        _ => None, // macOS and other OS types don't support CUDA
+    };
+
+    // Check CUDA support if on a supported platform
+    if let Some((min_cuda11_driver, min_cuda12_driver, min_cuda13_driver)) = cuda_drivers {
+        for gpu_info in &gpus {
+            let driver_version = &gpu_info.driver_version;
+
+            if gpu_info.nvidia_info.is_some() {
+                if compare_versions(driver_version, min_cuda11_driver) >= 0 {
+                    features.cuda11 = true;
+                }
+                if compare_versions(driver_version, min_cuda12_driver) >= 0 {
+                    features.cuda12 = true;
+                }
+                if compare_versions(driver_version, min_cuda13_driver) >= 0 {
+                    features.cuda13 = true;
+                }
+            }
+        }
+    }
+
+    log::info!(
+        "Supported features: vulkan={}, cuda11={}, cuda12={}, cuda13={}",
+        features.vulkan,
+        features.cuda11,
+        features.cuda12,
+        features.cuda13
+    );
 
     Ok(features)
 }
@@ -547,7 +567,25 @@ pub async fn prioritize_backends(
         return Err("No backends available".to_string());
     }
 
-    // Priority list based on GPU memory
+    // Priority list based on GPU memory and platform
+    // On macOS, always prioritize Vulkan over CPU backends since MoltenVK works well
+    // even with GPUs that have less than 6GB VRAM (like AMD Radeon Pro 5300 with 4GB)
+    #[cfg(target_os = "macos")]
+    let backend_priorities: Vec<&str> = vec![
+        "cuda-cu13.0",
+        "cuda-cu12.0",
+        "cuda-cu11.7",
+        "vulkan", // Always prioritize Vulkan on macOS - MoltenVK handles memory well
+        "arm64",
+        "x64",
+        "common_cpus",
+        "avx512",
+        "avx2",
+        "avx",
+        "noavx",
+    ];
+
+    #[cfg(not(target_os = "macos"))]
     let backend_priorities: Vec<&str> = if has_enough_gpu_memory {
         vec![
             "cuda-cu13.0",

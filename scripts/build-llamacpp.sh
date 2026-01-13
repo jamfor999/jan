@@ -325,6 +325,13 @@ build_macos_vulkan_x64() {
     # Copy any Vulkan-related dylibs from the build
     cp "$build_path/bin/"*.dylib "$install_path/build/bin/" 2>/dev/null || true
     
+    # Also copy MoltenVK to Tauri resources for bundling in the .app
+    # This allows the hardware detection plugin to find it at runtime
+    local tauri_frameworks_dir="$SCRIPT_DIR/../src-tauri/resources/frameworks"
+    mkdir -p "$tauri_frameworks_dir"
+    cp "$vulkan_library" "$tauri_frameworks_dir/"
+    log_info "Copied MoltenVK to $tauri_frameworks_dir for app bundling"
+    
     log_success "Built $backend_name -> $install_path"
 }
 

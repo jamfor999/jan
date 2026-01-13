@@ -9,6 +9,9 @@ use {
     vulkano::VulkanLibrary,
 };
 
+#[cfg(all(target_os = "macos", not(any(target_os = "android", target_os = "ios"))))]
+use vulkano::library::DynamicLibraryLoader;
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct VulkanInfo {
     pub index: u64,
@@ -44,6 +47,44 @@ fn parse_uuid(bytes: &[u8; 16]) -> String {
     )
 }
 
+/// On macOS, find MoltenVK library path in the app bundle or standard locations
+#[cfg(target_os = "macos")]
+fn find_moltenvk_library_path() -> Option<std::path::PathBuf> {
+    use std::env;
+    use std::path::PathBuf;
+    
+    // First, try the app bundle's Frameworks directory
+    if let Ok(exe_path) = env::current_exe() {
+        // In a .app bundle: /path/to/Jan.app/Contents/MacOS/Jan
+        // Frameworks are at: /path/to/Jan.app/Contents/Frameworks/
+        if let Some(macos_dir) = exe_path.parent() {
+            if let Some(contents_dir) = macos_dir.parent() {
+                let frameworks_lib = contents_dir.join("Frameworks").join("libMoltenVK.dylib");
+                if frameworks_lib.exists() {
+                    log::info!("Found MoltenVK in app bundle: {:?}", frameworks_lib);
+                    return Some(frameworks_lib);
+                }
+            }
+        }
+    }
+    
+    // Try common installation paths
+    let common_paths = [
+        PathBuf::from("/usr/local/lib/libMoltenVK.dylib"),
+        PathBuf::from("/opt/homebrew/lib/libMoltenVK.dylib"),
+    ];
+    
+    for path in common_paths {
+        if path.exists() {
+            log::info!("Found MoltenVK at system path: {:?}", path);
+            return Some(path);
+        }
+    }
+    
+    log::debug!("MoltenVK not found in app bundle or standard paths");
+    None
+}
+
 pub fn get_vulkan_gpus() -> Vec<GpuInfo> {
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
@@ -65,6 +106,20 @@ pub fn get_vulkan_gpus() -> Vec<GpuInfo> {
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn get_vulkan_gpus_internal() -> Result<Vec<GpuInfo>, Box<dyn std::error::Error>> {
+    // On macOS, try to load MoltenVK from the app bundle first
+    #[cfg(target_os = "macos")]
+    let library = {
+        if let Some(moltenvk_path) = find_moltenvk_library_path() {
+            // Load from the specific path we found
+            let loader = unsafe { DynamicLibraryLoader::new(&moltenvk_path)? };
+            VulkanLibrary::with_loader(loader)?
+        } else {
+            // Fall back to default search paths
+            VulkanLibrary::new()?
+        }
+    };
+    
+    #[cfg(not(target_os = "macos"))]
     let library = VulkanLibrary::new()?;
 
     // Check for MoltenVK portability enumeration extension on macOS
@@ -72,10 +127,14 @@ fn get_vulkan_gpus_internal() -> Result<Vec<GpuInfo>, Box<dyn std::error::Error>
     #[cfg(target_os = "macos")]
     let (extensions, flags) = {
         let supported_extensions = library.supported_extensions();
+        
+        // MoltenVK 1.4+ always supports portability enumeration, but may not advertise
+        // the extension explicitly. We try to enable it if available, otherwise we still
+        // set the ENUMERATE_PORTABILITY flag as MoltenVK requires it.
         let has_portability = supported_extensions.khr_portability_enumeration;
         
         if has_portability {
-            log::info!("MoltenVK portability enumeration extension available");
+            log::info!("MoltenVK portability enumeration extension explicitly available");
             (
                 InstanceExtensions {
                     khr_portability_enumeration: true,
@@ -84,8 +143,14 @@ fn get_vulkan_gpus_internal() -> Result<Vec<GpuInfo>, Box<dyn std::error::Error>
                 InstanceCreateFlags::ENUMERATE_PORTABILITY,
             )
         } else {
-            log::warn!("MoltenVK portability enumeration extension not available - AMD GPU detection may not work");
-            (InstanceExtensions::default(), InstanceCreateFlags::empty())
+            // Even without the extension explicitly advertised, MoltenVK still requires
+            // the ENUMERATE_PORTABILITY flag to enumerate devices properly.
+            // We'll try without the extension but with the flag.
+            log::info!("MoltenVK detected - enabling portability enumeration flag");
+            (
+                InstanceExtensions::default(),
+                InstanceCreateFlags::ENUMERATE_PORTABILITY,
+            )
         }
     };
 
@@ -105,8 +170,19 @@ fn get_vulkan_gpus_internal() -> Result<Vec<GpuInfo>, Box<dyn std::error::Error>
 
     let mut device_info_list = vec![];
 
-    for (i, physical_device) in instance.enumerate_physical_devices()?.enumerate() {
+    let physical_devices: Vec<_> = instance.enumerate_physical_devices()?.collect();
+    log::info!("Found {} Vulkan physical devices", physical_devices.len());
+
+    for (i, physical_device) in physical_devices.into_iter().enumerate() {
         let properties = physical_device.properties();
+        
+        log::info!(
+            "Device {}: {} (type: {:?}, vendor: 0x{:04x})",
+            i,
+            properties.device_name,
+            properties.device_type,
+            properties.vendor_id
+        );
 
         if properties.device_type == PhysicalDeviceType::Cpu {
             continue;

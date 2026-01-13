@@ -233,7 +233,19 @@ export default class llamacpp_extension extends AIEngine {
       bestAvailableBackendString =
         await this.determineBestBackend(version_backends)
 
-      if (storedBackendType) {
+      // One-time migration: if user has macos-x64 stored but macos-vulkan-x64 is now available,
+      // clear the preference to allow automatic selection of the Vulkan backend
+      if (
+        storedBackendType === 'macos-x64' &&
+        IS_MAC &&
+        version_backends.some((b) => b.backend === 'macos-vulkan-x64')
+      ) {
+        logger.info(
+          'Vulkan backend now available - clearing old macos-x64 preference to enable GPU acceleration'
+        )
+        this.clearStoredBackendType()
+        // Don't use stored preference, let it fall through to best available
+      } else if (storedBackendType) {
         // Delegate migration check to Rust
         const migrationTarget = await shouldMigrateBackend(
           storedBackendType,
@@ -440,14 +452,31 @@ export default class llamacpp_extension extends AIEngine {
     if (version_backends.length === 0) return ''
 
     // Check GPU memory availability via system info
+    // For CUDA, we require 6GB+ for reliable performance with most models
+    // For Vulkan on macOS (AMD GPUs via MoltenVK), we use a lower threshold (2GB)
+    // since quantized models work well even on 4GB GPUs
     let hasEnoughGpuMemory = false
+    let hasVulkanGpu = false
     try {
       const sysInfo = await getSystemInfo()
       for (const gpuInfo of sysInfo.gpus) {
-        if (gpuInfo.total_memory >= 6 * 1024) {
+        // Check if this GPU has Vulkan support
+        if (gpuInfo.vulkan_info) {
+          hasVulkanGpu = true
+          // Lower threshold for Vulkan GPUs (2GB minimum)
+          if (gpuInfo.total_memory >= 2 * 1024) {
+            hasEnoughGpuMemory = true
+          }
+        }
+        // Higher threshold for CUDA GPUs (6GB)
+        if (gpuInfo.nvidia_info && gpuInfo.total_memory >= 6 * 1024) {
           hasEnoughGpuMemory = true
           break
         }
+      }
+      // If we have a Vulkan GPU on macOS, always prefer GPU backend
+      if (hasVulkanGpu && IS_MAC) {
+        hasEnoughGpuMemory = true
       }
     } catch (error) {
       logger.warn('Failed to get system info for GPU memory check:', error)

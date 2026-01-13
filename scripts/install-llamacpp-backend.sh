@@ -22,7 +22,20 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Configuration
 LLAMA_CPP_DIR="${LLAMA_CPP_DIR:-$PROJECT_ROOT/vendor/llama.cpp}"
 DIST_DIR="${DIST_DIR:-$PROJECT_ROOT/dist/llamacpp}"
-JAN_DATA_DIR="${JAN_DATA_DIR:-$HOME/jan}"
+
+# Determine Jan data folder based on platform
+# macOS: ~/Library/Application Support/Jan/data
+# Linux: ~/.config/Jan/data or $XDG_DATA_HOME/Jan/data
+# Windows: %APPDATA%/Jan/data (not handled here)
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    DEFAULT_JAN_DATA_DIR="$HOME/Library/Application Support/Jan/data"
+elif [[ "$OSTYPE" == "linux"* ]]; then
+    DEFAULT_JAN_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/Jan/data"
+else
+    DEFAULT_JAN_DATA_DIR="$HOME/jan"
+fi
+
+JAN_DATA_DIR="${JAN_DATA_DIR:-$DEFAULT_JAN_DATA_DIR}"
 JAN_BACKENDS_DIR="$JAN_DATA_DIR/llamacpp/backends"
 
 # Colors

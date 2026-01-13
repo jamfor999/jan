@@ -154,7 +154,44 @@ function SystemMonitorContent() {
           </div>
         </div>
 
-        {/* GPU Usage Card */}
+        {/* GPU Usage Card - macOS with Vulkan */}
+        {IS_MACOS && hardwareData.gpus.length > 0 && (
+          <div className="bg-main-view-fg/2 rounded-lg p-6 shadow-sm">
+            <h2 className="text-base font-semibold text-main-view-fg mb-4">
+              {t('system-monitor:activeGpus')}
+            </h2>
+            <div className="flex flex-col gap-2">
+              {hardwareData.gpus.map((gpu, index) => (
+                <div key={index} className="flex flex-col gap-1">
+                  <div className="flex justify-between items-center">
+                    <span className="text-main-view-fg/70">
+                      {gpu.name}
+                    </span>
+                    <span className="text-sm px-2 py-1 rounded-md bg-green-500/20 text-green-600 dark:text-green-400">
+                      {gpu.vulkan_info ? 'Vulkan' : gpu.vendor}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-main-view-fg/70">VRAM:</span>
+                    <span className="text-main-view-fg">
+                      {formatMegaBytes(gpu.total_memory)}
+                    </span>
+                  </div>
+                  {gpu.vulkan_info && (
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-main-view-fg/70">Vulkan API:</span>
+                      <span className="text-main-view-fg">
+                        {gpu.vulkan_info.api_version}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* GPU Usage Card - Windows/Linux with CUDA */}
         {!IS_MACOS && (
           <div className="bg-main-view-fg/2 rounded-lg p-6 shadow-sm">
             <h2 className="text-base font-semibold text-main-view-fg mb-4">

@@ -280,7 +280,45 @@ function HardwareContent() {
                 />
               </Card>
 
-              {/* Llamacpp Devices Information */}
+              {/* GPU Information - macOS with Vulkan */}
+              {IS_MACOS && hardwareData.gpus.length > 0 && (
+                <Card title="GPUs">
+                  {hardwareData.gpus.map((gpu, index) => (
+                    <Card key={index}>
+                      <CardItem
+                        title={gpu.name}
+                        actions={
+                          <span className="text-main-view-fg/80 text-sm">
+                            {gpu.vendor}
+                          </span>
+                        }
+                      />
+                      <div className="mt-3">
+                        <CardItem
+                          title={t('settings:hardware.vram')}
+                          actions={
+                            <span className="text-main-view-fg/80">
+                              {formatMegaBytes(gpu.total_memory)}
+                            </span>
+                          }
+                        />
+                        {gpu.vulkan_info && (
+                          <CardItem
+                            title="Vulkan"
+                            actions={
+                              <span className="text-main-view-fg/80">
+                                {gpu.vulkan_info.api_version} ({gpu.vulkan_info.device_type})
+                              </span>
+                            }
+                          />
+                        )}
+                      </div>
+                    </Card>
+                  ))}
+                </Card>
+              )}
+
+              {/* Llamacpp Devices Information - Windows/Linux with CUDA */}
               {!IS_MACOS && llamacpp && (
                 <Card title="GPUs">
                   {llamacppDevicesLoading ? (

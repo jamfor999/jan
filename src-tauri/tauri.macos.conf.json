@@ -4,7 +4,8 @@
     "resources": ["resources/pre-install/**/*", "resources/LICENSE"],
     "externalBin": ["resources/bin/bun", "resources/bin/uv"],
     "macOS": {
-      "entitlements": "./Entitlements.plist"
+      "entitlements": "./Entitlements.plist",
+      "frameworks": ["resources/frameworks/libMoltenVK.dylib"]
     }
   }
 }
