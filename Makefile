@@ -126,9 +126,66 @@ endif
 	cargo test --manifest-path src-tauri/plugins/tauri-plugin-llamacpp/Cargo.toml
 	cargo test --manifest-path src-tauri/utils/Cargo.toml
 
-# Build
+# Build (standard build, downloads pre-built llama.cpp backends from GitHub)
 build: install-and-build install-rust-targets
 	yarn build
+
+# ============================================================================
+# Complete Build with Local llama.cpp (single command)
+# ============================================================================
+
+# Build everything from source, including llama.cpp with Vulkan/MoltenVK support
+# This is the recommended target for Intel Macs with AMD GPUs
+build-all: install-and-build install-rust-targets build-llamacpp install-llamacpp
+	@echo "Building Jan with locally-built llama.cpp backends..."
+	yarn build
+
+# ============================================================================
+# llama.cpp Backend Build Targets
+# ============================================================================
+
+# Initialize llama.cpp submodule
+init-llamacpp:
+	@echo "Initializing llama.cpp submodule..."
+	@git submodule update --init --recursive vendor/llama.cpp
+
+# Build llama.cpp backend for current platform (auto-detects best config)
+build-llamacpp: init-llamacpp
+	@echo "Building llama.cpp for current platform..."
+	./scripts/build-llamacpp.sh
+
+# Build specific llama.cpp backends
+build-llamacpp-macos-arm64: init-llamacpp
+	./scripts/build-llamacpp.sh macos-arm64
+
+build-llamacpp-macos-x64: init-llamacpp
+	./scripts/build-llamacpp.sh macos-x64
+
+build-llamacpp-macos-vulkan: init-llamacpp
+	@echo "Building llama.cpp with MoltenVK/Vulkan support for Intel Macs..."
+	./scripts/build-llamacpp.sh macos-vulkan-x64
+
+build-llamacpp-linux-x64: init-llamacpp
+	./scripts/build-llamacpp.sh linux-x64
+
+build-llamacpp-linux-vulkan: init-llamacpp
+	./scripts/build-llamacpp.sh linux-vulkan-x64
+
+# Build all llama.cpp backends for current platform
+build-llamacpp-all: init-llamacpp
+	./scripts/build-llamacpp.sh all
+
+# Install locally-built llama.cpp backend to Jan's data folder
+# This copies the built backend to ~/jan/llamacpp/backends/<version>/<backend>/
+install-llamacpp:
+	@echo "Installing locally-built llama.cpp backends to Jan data folder..."
+	./scripts/install-llamacpp-backend.sh
+
+# Clean llama.cpp build artifacts
+clean-llamacpp:
+	rm -rf build/llamacpp dist/llamacpp
+
+# ============================================================================
 
 clean:
 ifeq ($(OS),Windows_NT)
