@@ -494,9 +494,7 @@ main() {
                     package_backend "macos-arm64"
                     ;;
                 macos-x64)
-                    # On Intel Mac, build both CPU and Vulkan variants
-                    build_macos_x64
-                    package_backend "macos-x64"
+                    # On Intel Mac, build Vulkan variant for AMD GPU support
                     build_macos_vulkan_x64
                     package_backend "macos-vulkan-x64"
                     ;;
