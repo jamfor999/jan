@@ -1,5 +1,5 @@
 use crate::{
-    constants::{VENDOR_ID_AMD, VENDOR_ID_INTEL, VENDOR_ID_NVIDIA},
+    constants::{VENDOR_ID_AMD, VENDOR_ID_APPLE, VENDOR_ID_INTEL, VENDOR_ID_NVIDIA},
     types::{GpuInfo, GpuUsage, Vendor},
 };
 
@@ -9,6 +9,7 @@ impl Vendor {
             VENDOR_ID_AMD => Vendor::AMD,
             VENDOR_ID_NVIDIA => Vendor::NVIDIA,
             VENDOR_ID_INTEL => Vendor::Intel,
+            VENDOR_ID_APPLE => Vendor::Apple,
             _ => Vendor::Unknown(vendor_id),
         }
     }

@@ -15,6 +15,7 @@ pub enum Vendor {
     AMD,
     NVIDIA,
     Intel,
+    Apple,
     Unknown(u32),
 }
 
@@ -27,6 +28,7 @@ impl Serialize for Vendor {
             Vendor::AMD => "AMD".serialize(serializer),
             Vendor::NVIDIA => "NVIDIA".serialize(serializer),
             Vendor::Intel => "Intel".serialize(serializer),
+            Vendor::Apple => "Apple".serialize(serializer),
             Vendor::Unknown(vendor_id) => {
                 let formatted = format!("Unknown (vendor_id: {})", vendor_id);
                 serializer.serialize_str(&formatted)

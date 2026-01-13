@@ -4,7 +4,7 @@ use crate::types::GpuInfo;
 use {
     crate::types::Vendor,
     vulkano::device::physical::PhysicalDeviceType,
-    vulkano::instance::{Instance, InstanceCreateInfo},
+    vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo, InstanceExtensions},
     vulkano::memory::MemoryHeapFlags,
     vulkano::VulkanLibrary,
 };
@@ -67,11 +67,38 @@ pub fn get_vulkan_gpus() -> Vec<GpuInfo> {
 fn get_vulkan_gpus_internal() -> Result<Vec<GpuInfo>, Box<dyn std::error::Error>> {
     let library = VulkanLibrary::new()?;
 
+    // Check for MoltenVK portability enumeration extension on macOS
+    // This is required to enumerate GPUs through MoltenVK's Vulkan-to-Metal translation layer
+    #[cfg(target_os = "macos")]
+    let (extensions, flags) = {
+        let supported_extensions = library.supported_extensions();
+        let has_portability = supported_extensions.khr_portability_enumeration;
+        
+        if has_portability {
+            log::info!("MoltenVK portability enumeration extension available");
+            (
+                InstanceExtensions {
+                    khr_portability_enumeration: true,
+                    ..Default::default()
+                },
+                InstanceCreateFlags::ENUMERATE_PORTABILITY,
+            )
+        } else {
+            log::warn!("MoltenVK portability enumeration extension not available - AMD GPU detection may not work");
+            (InstanceExtensions::default(), InstanceCreateFlags::empty())
+        }
+    };
+
+    #[cfg(not(target_os = "macos"))]
+    let (extensions, flags) = (InstanceExtensions::default(), InstanceCreateFlags::empty());
+
     let instance = Instance::new(
         library,
         InstanceCreateInfo {
             application_name: Some("Jan GPU Detection".into()),
             application_version: vulkano::Version::V1_1,
+            enabled_extensions: extensions,
+            flags,
             ..Default::default()
         },
     )?;

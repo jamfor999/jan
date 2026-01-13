@@ -40,7 +40,12 @@ pub fn map_old_backend_to_new(old_backend: String) -> String {
         );
     } else if old_backend.contains("vulkan") {
         // If it's already the new name, return it
-        if old_backend.contains("vulkan-common_cpus") {
+        if old_backend.contains("vulkan-common_cpus") || old_backend.contains("macos-vulkan") {
+            return old_backend;
+        }
+
+        // Handle macOS Vulkan backend specially (macos-vulkan-x64 doesn't need common_cpus suffix)
+        if old_backend.starts_with("macos-") {
             return old_backend;
         }
 
@@ -236,6 +241,10 @@ pub fn determine_supported_backends(
         }
         "macos-x86_64" | "macos-x86" => {
             supported_backends.push("macos-x64".to_string());
+            // Support Vulkan backend on Intel Macs for AMD GPU acceleration via MoltenVK
+            if features.vulkan {
+                supported_backends.push("macos-vulkan-x64".to_string());
+            }
         }
         "macos-aarch64" | "macos-arm64" => {
             supported_backends.push("macos-arm64".to_string());
@@ -450,6 +459,36 @@ pub async fn is_cuda_installed(
         }
     }
 
+    Ok(false)
+}
+
+/// Check if MoltenVK library is installed for macOS Vulkan backend
+/// MoltenVK is required for Vulkan support on macOS (provides Vulkan-to-Metal translation)
+#[tauri::command]
+pub async fn is_moltenvk_installed(backend_dir: String) -> Result<bool, String> {
+    // MoltenVK library name on macOS
+    let libname = "libMoltenVK.dylib";
+
+    // Check in backend_dir/build/bin/
+    let build_path = std::path::PathBuf::from(&backend_dir)
+        .join("build")
+        .join("bin")
+        .join(libname);
+
+    if build_path.exists() {
+        log::info!("[MoltenVK] Found at {}", build_path.display());
+        return Ok(true);
+    }
+
+    // Check in backend_dir root
+    let root_path = std::path::PathBuf::from(&backend_dir).join(libname);
+
+    if root_path.exists() {
+        log::info!("[MoltenVK] Found at {}", root_path.display());
+        return Ok(true);
+    }
+
+    log::info!("[MoltenVK] Not found in backend directory: {}", backend_dir);
     Ok(false)
 }
 
@@ -907,6 +946,11 @@ mod tests {
             map_old_backend_to_new("win-vulkan-common_cpus-x64".to_string()),
             "win-vulkan-common_cpus-x64"
         );
+        // macOS Vulkan (should not add common_cpus suffix)
+        assert_eq!(
+            map_old_backend_to_new("macos-vulkan-x64".to_string()),
+            "macos-vulkan-x64"
+        );
     }
 
     #[test]
@@ -1032,6 +1076,43 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], "macos-arm64");
+    }
+
+    #[test]
+    fn test_determine_supported_backends_mac_x64_with_vulkan() {
+        // Intel Mac with AMD GPU (Vulkan available via MoltenVK)
+        let features = SystemFeatures {
+            cuda11: false,
+            cuda12: false,
+            cuda13: false,
+            vulkan: true,
+        };
+
+        let result =
+            determine_supported_backends("macos".to_string(), "x86_64".to_string(), features)
+                .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&"macos-x64".to_string()));
+        assert!(result.contains(&"macos-vulkan-x64".to_string()));
+    }
+
+    #[test]
+    fn test_determine_supported_backends_mac_x64_without_vulkan() {
+        // Intel Mac without AMD GPU (no Vulkan)
+        let features = SystemFeatures {
+            cuda11: false,
+            cuda12: false,
+            cuda13: false,
+            vulkan: false,
+        };
+
+        let result =
+            determine_supported_backends("macos".to_string(), "x86_64".to_string(), features)
+                .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "macos-x64");
     }
 
     // --- Tests for list_supported_backends ---

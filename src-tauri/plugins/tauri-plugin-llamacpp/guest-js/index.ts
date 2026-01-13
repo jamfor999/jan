@@ -292,6 +292,19 @@ export async function isCudaInstalledFromRust(
   })
 }
 
+/**
+ * Check if MoltenVK is installed for macOS Vulkan backend.
+ * MoltenVK is required for Vulkan support on macOS (provides Vulkan-to-Metal translation).
+ * This enables AMD GPU acceleration on Intel Macs.
+ */
+export async function isMoltenVKInstalledFromRust(
+  backendDir: string
+): Promise<boolean> {
+  return invoke<boolean>('plugin:llamacpp|is_moltenvk_installed', {
+    backendDir,
+  })
+}
+
 export async function findLatestVersionForBackend(
   versionBackends: BackendVersion[],
   backendType: string

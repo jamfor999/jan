@@ -99,10 +99,15 @@ Different backends are optimized for different hardware. Pick the one that match
 - `llama.cpp-mac-arm64` (recommended)
 
 ### Intel Macs
-- `llama.cpp-mac-amd64`
+- `llama.cpp-mac-amd64` (CPU only)
+- `llama.cpp-mac-vulkan` (AMD GPU acceleration via MoltenVK)
 
 <Callout type="info">
-Apple Silicon automatically uses GPU acceleration through Metal.
+Apple Silicon automatically uses GPU acceleration through Metal. No additional setup required.
+</Callout>
+
+<Callout type="warning">
+**Intel Macs with AMD GPUs**: The `mac-vulkan` backend enables GPU acceleration for Intel Macs with discrete AMD graphics cards (e.g., Radeon Pro 5500M). This uses MoltenVK to translate Vulkan calls to Metal. This feature is experimental.
 </Callout>
 
 </Tabs.Tab>

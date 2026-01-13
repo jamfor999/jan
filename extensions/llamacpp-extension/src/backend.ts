@@ -12,6 +12,7 @@ import {
   BackendVersion,
   getSupportedFeaturesFromRust,
   isCudaInstalledFromRust,
+  isMoltenVKInstalledFromRust,
 } from '@janhq/tauri-plugin-llamacpp-api'
 
 /*
@@ -224,6 +225,22 @@ export async function downloadBackend(
       model_id: taskId,
     })
   }
+
+  // Download MoltenVK for macOS Vulkan backend (AMD GPU support on Intel Macs)
+  if (
+    backend.includes('macos-vulkan') &&
+    !(await _isMoltenVKInstalled(backendDir))
+  ) {
+    // MoltenVK version to download - using stable release from Khronos
+    const moltenVKVersion = '1.4.0'
+    downloadItems.push({
+      url: `https://github.com/KhronosGroup/MoltenVK/releases/download/v${moltenVKVersion}/MoltenVK-macos.tar`,
+      save_path: await joinPath([backendDir, 'build', 'bin', 'moltenvk.tar']),
+      proxy: proxyConfig,
+      model_id: taskId,
+    })
+  }
+
   const downloadType = 'Engine'
 
   console.log(
@@ -251,12 +268,37 @@ export async function downloadBackend(
       return
     }
 
-    // decompress the downloaded tar.gz files
+    // decompress the downloaded tar.gz and tar files
     for (const { save_path } of downloadItems) {
-      if (save_path.endsWith('.tar.gz')) {
+      if (save_path.endsWith('.tar.gz') || save_path.endsWith('.tar')) {
         const parentDir = await dirname(save_path)
         await invoke('decompress', { path: save_path, outputDir: parentDir })
         await fs.rm(save_path)
+      }
+    }
+
+    // Post-process MoltenVK: extract libMoltenVK.dylib from the nested structure
+    // MoltenVK tar extracts to: MoltenVK/MoltenVK/dynamic/dylib/macOS/libMoltenVK.dylib
+    if (backend.includes('macos-vulkan')) {
+      const binDir = await joinPath([backendDir, 'build', 'bin'])
+      const moltenVKSource = await joinPath([
+        binDir,
+        'MoltenVK',
+        'MoltenVK',
+        'dynamic',
+        'dylib',
+        'macOS',
+        'libMoltenVK.dylib',
+      ])
+      const moltenVKDest = await joinPath([binDir, 'libMoltenVK.dylib'])
+
+      if (await fs.existsSync(moltenVKSource)) {
+        // Copy the dylib to the bin directory
+        await fs.copyFile(moltenVKSource, moltenVKDest)
+        // Clean up the extracted MoltenVK directory
+        const moltenVKDir = await joinPath([binDir, 'MoltenVK'])
+        await fs.rm(moltenVKDir)
+        console.log('MoltenVK library installed successfully')
       }
     }
 
@@ -327,4 +369,9 @@ async function _isCudaInstalled(
     sysInfo.os_type,
     janDataFolderPath
   )
+}
+
+// Check if MoltenVK is installed for macOS Vulkan backend
+async function _isMoltenVKInstalled(backendDir: string): Promise<boolean> {
+  return isMoltenVKInstalledFromRust(backendDir)
 }
