@@ -9,9 +9,7 @@
 #
 # Backends:
 #   macos-arm64         - macOS Apple Silicon with Metal
-#   macos-metal-x64     - macOS Intel with Metal (AMD/Nvidia/Intel GPUs)
-#   macos-x64           - macOS Intel (CPU only)
-#   macos-vulkan-x64    - macOS Intel with Vulkan (via MoltenVK)
+#   macos-x64           - macOS Intel (CPU only, optimized for performance)
 #   linux-x64           - Linux x64 (CPU)
 #   linux-vulkan-x64    - Linux x64 with Vulkan
 #   all                 - Build all backends for current platform
@@ -553,11 +551,9 @@ main() {
                     package_backend "macos-arm64"
                     ;;
                 macos-x64)
-                    # On Intel Mac, build GPU backends (Metal + Vulkan)
-                    build_macos_metal_x64
-                    package_backend "macos-metal-x64"
-                    build_macos_vulkan_x64
-                    package_backend "macos-vulkan-x64"
+                    # On Intel Mac, only build CPU backend (Metal/Vulkan don't work reliably)
+                    build_macos_x64
+                    package_backend "macos-x64"
                     ;;
                 linux-x64)
                     build_linux_x64
@@ -579,11 +575,9 @@ main() {
                     package_backend "macos-arm64"
                     ;;
                 macos-x64)
-                    # On Intel Mac, build GPU backends (Metal + Vulkan)
-                    build_macos_metal_x64
-                    package_backend "macos-metal-x64"
-                    build_macos_vulkan_x64
-                    package_backend "macos-vulkan-x64"
+                    # On Intel Mac, only build CPU backend (Metal/Vulkan don't work reliably)
+                    build_macos_x64
+                    package_backend "macos-x64"
                     ;;
                 linux-x64)
                     build_linux_x64
@@ -597,7 +591,7 @@ main() {
             ;;
         *)
             log_error "Unknown backend: $BACKEND"
-            echo "Available backends: macos-arm64, macos-metal-x64, macos-vulkan-x64, linux-x64, linux-vulkan-x64, all"
+            echo "Available backends: macos-arm64, macos-x64, linux-x64, linux-vulkan-x64, all"
             exit 1
             ;;
     esac
