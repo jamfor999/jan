@@ -241,6 +241,8 @@ pub fn determine_supported_backends(
         }
         "macos-x86_64" | "macos-x86" => {
             supported_backends.push("macos-x64".to_string());
+            // Native Metal backend for Intel Macs with discrete GPUs
+            supported_backends.push("macos-metal-x64".to_string());
             // Support Vulkan backend on Intel Macs for AMD GPU acceleration via MoltenVK
             if features.vulkan {
                 supported_backends.push("macos-vulkan-x64".to_string());
@@ -575,7 +577,8 @@ pub async fn prioritize_backends(
         "cuda-cu13.0",
         "cuda-cu12.0",
         "cuda-cu11.7",
-        "vulkan", // Always prioritize Vulkan on macOS - MoltenVK handles memory well
+        "metal",  // Prefer native Metal first on macOS
+        "vulkan", // MoltenVK fallback for wider GPU support
         "arm64",
         "x64",
         "common_cpus",
@@ -663,6 +666,9 @@ fn get_backend_category(backend_string: &str) -> Option<String> {
     }
     if backend_string.contains("cuda-11-common_cpus") || backend_string.contains("cu11.7") {
         return Some("cuda-cu11.7".to_string());
+    }
+    if backend_string.contains("metal") {
+        return Some("metal".to_string());
     }
     if backend_string.contains("vulkan") {
         return Some("vulkan".to_string());
@@ -1130,8 +1136,9 @@ mod tests {
             determine_supported_backends("macos".to_string(), "x86_64".to_string(), features)
                 .unwrap();
 
-        assert_eq!(result.len(), 2);
+        assert_eq!(result.len(), 3);
         assert!(result.contains(&"macos-x64".to_string()));
+        assert!(result.contains(&"macos-metal-x64".to_string()));
         assert!(result.contains(&"macos-vulkan-x64".to_string()));
     }
 
@@ -1149,8 +1156,9 @@ mod tests {
             determine_supported_backends("macos".to_string(), "x86_64".to_string(), features)
                 .unwrap();
 
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0], "macos-x64");
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&"macos-x64".to_string()));
+        assert!(result.contains(&"macos-metal-x64".to_string()));
     }
 
     // --- Tests for list_supported_backends ---

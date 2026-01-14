@@ -9,6 +9,7 @@
 #
 # Backends:
 #   macos-arm64         - macOS Apple Silicon with Metal
+#   macos-metal-x64     - macOS Intel with Metal (AMD/Nvidia/Intel GPUs)
 #   macos-x64           - macOS Intel (CPU only)
 #   macos-vulkan-x64    - macOS Intel with Vulkan (via MoltenVK)
 #   linux-x64           - Linux x64 (CPU)
@@ -223,6 +224,53 @@ build_macos_arm64() {
     mkdir -p "$install_path/build/bin"
     cp "$build_path/bin/llama-server" "$install_path/build/bin/"
     cp "$build_path/bin/llama-cli" "$install_path/build/bin/" 2>/dev/null || true
+    # Bundle required dylibs for runtime
+    cp "$build_path/bin/"*.dylib "$install_path/build/bin/" 2>/dev/null || true
+    
+    # Copy Metal library if exists
+    if [ -f "$build_path/bin/ggml-metal.metallib" ]; then
+        cp "$build_path/bin/ggml-metal.metallib" "$install_path/build/bin/"
+    fi
+    
+    log_success "Built $backend_name -> $install_path"
+}
+
+# Build llama.cpp for macOS x64 (Metal)
+build_macos_metal_x64() {
+    local backend_name="macos-metal-x64"
+    local build_path="$BUILD_DIR/$backend_name"
+    local install_path="$INSTALL_DIR/$backend_name"
+    
+    log_info "Building llama.cpp for macOS x64 (Metal)..."
+    
+    if [ "$CLEAN_BUILD" = true ]; then
+        rm -rf "$build_path"
+    fi
+    
+    mkdir -p "$build_path"
+    
+    cmake -S "$LLAMA_CPP_DIR" -B "$build_path" \
+        -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+        -DCMAKE_OSX_ARCHITECTURES="x86_64" \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET="11.0" \
+        -DCMAKE_INSTALL_RPATH="@loader_path" \
+        -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+        -DGGML_METAL=ON \
+        -DGGML_METAL_USE_BF16=ON \
+        -DGGML_METAL_EMBED_LIBRARY=ON \
+        -DLLAMA_BUILD_EXAMPLES=OFF \
+        -DLLAMA_BUILD_TESTS=OFF \
+        -DLLAMA_BUILD_TOOLS=ON \
+        -DLLAMA_BUILD_SERVER=ON
+    
+    cmake --build "$build_path" --config "$BUILD_TYPE" -j "$(sysctl -n hw.logicalcpu)"
+    
+    # Install
+    mkdir -p "$install_path/build/bin"
+    cp "$build_path/bin/llama-server" "$install_path/build/bin/"
+    cp "$build_path/bin/llama-cli" "$install_path/build/bin/" 2>/dev/null || true
+    # Bundle required dylibs for runtime
+    cp "$build_path/bin/"*.dylib "$install_path/build/bin/" 2>/dev/null || true
     
     # Copy Metal library if exists
     if [ -f "$build_path/bin/ggml-metal.metallib" ]; then
@@ -457,6 +505,10 @@ main() {
             build_macos_x64
             package_backend "macos-x64"
             ;;
+        macos-metal-x64)
+            build_macos_metal_x64
+            package_backend "macos-metal-x64"
+            ;;
         macos-vulkan-x64)
             build_macos_vulkan_x64
             package_backend "macos-vulkan-x64"
@@ -476,8 +528,9 @@ main() {
                     package_backend "macos-arm64"
                     ;;
                 macos-x64)
-                    build_macos_x64
-                    package_backend "macos-x64"
+                    # On Intel Mac, build GPU backends (Metal + Vulkan)
+                    build_macos_metal_x64
+                    package_backend "macos-metal-x64"
                     build_macos_vulkan_x64
                     package_backend "macos-vulkan-x64"
                     ;;
@@ -501,7 +554,9 @@ main() {
                     package_backend "macos-arm64"
                     ;;
                 macos-x64)
-                    # On Intel Mac, build Vulkan variant for AMD GPU support
+                    # On Intel Mac, build GPU backends (Metal + Vulkan)
+                    build_macos_metal_x64
+                    package_backend "macos-metal-x64"
                     build_macos_vulkan_x64
                     package_backend "macos-vulkan-x64"
                     ;;
@@ -517,7 +572,7 @@ main() {
             ;;
         *)
             log_error "Unknown backend: $BACKEND"
-            echo "Available backends: macos-arm64, macos-x64, macos-vulkan-x64, linux-x64, linux-vulkan-x64, all"
+            echo "Available backends: macos-arm64, macos-metal-x64, macos-vulkan-x64, linux-x64, linux-vulkan-x64, all"
             exit 1
             ;;
     esac

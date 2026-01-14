@@ -238,13 +238,25 @@ export default class llamacpp_extension extends AIEngine {
       if (
         storedBackendType === 'macos-x64' &&
         IS_MAC &&
-        version_backends.some((b) => b.backend === 'macos-vulkan-x64')
+        version_backends.some(
+          (b) =>
+            b.backend === 'macos-vulkan-x64' || b.backend === 'macos-metal-x64'
+        )
       ) {
         logger.info(
-          'Vulkan backend now available - clearing old macos-x64 preference to enable GPU acceleration'
+          'GPU backend now available - clearing old macos-x64 preference to enable acceleration'
         )
         this.clearStoredBackendType()
         // Don't use stored preference, let it fall through to best available
+      } else if (
+        storedBackendType === 'macos-vulkan-x64' &&
+        IS_MAC &&
+        version_backends.some((b) => b.backend === 'macos-metal-x64')
+      ) {
+        logger.info(
+          'Metal backend available - migrating stored macos-vulkan-x64 preference to macos-metal-x64'
+        )
+        this.setStoredBackendType('macos-metal-x64')
       } else if (storedBackendType) {
         // Delegate migration check to Rust
         const migrationTarget = await shouldMigrateBackend(
