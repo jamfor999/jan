@@ -280,13 +280,13 @@ build_macos_metal_x64() {
     log_success "Built $backend_name -> $install_path"
 }
 
-# Build llama.cpp for macOS x64 (CPU only)
+# Build llama.cpp for macOS x64 (CPU only) with Intel optimizations
 build_macos_x64() {
     local backend_name="macos-x64"
     local build_path="$BUILD_DIR/$backend_name"
     local install_path="$INSTALL_DIR/$backend_name"
     
-    log_info "Building llama.cpp for macOS x64 (CPU)..."
+    log_info "Building llama.cpp for macOS x64 (CPU with Intel optimizations)..."
     
     if [ "$CLEAN_BUILD" = true ]; then
         rm -rf "$build_path"
@@ -301,6 +301,15 @@ build_macos_x64() {
         -DCMAKE_INSTALL_RPATH="@loader_path" \
         -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
         -DGGML_METAL=OFF \
+        -DGGML_NATIVE=ON \
+        -DGGML_AVX2=ON \
+        -DGGML_FMA=ON \
+        -DGGML_F16C=ON \
+        -DGGML_SSE42=ON \
+        -DGGML_BMI2=ON \
+        -DGGML_CPU_REPACK=ON \
+        -DCMAKE_C_FLAGS="-march=native -mtune=native -O3 -fno-finite-math-only" \
+        -DCMAKE_CXX_FLAGS="-march=native -mtune=native -O3 -fno-finite-math-only" \
         -DLLAMA_BUILD_EXAMPLES=OFF \
         -DLLAMA_BUILD_TESTS=OFF \
         -DLLAMA_BUILD_TOOLS=ON \
@@ -383,13 +392,13 @@ build_macos_vulkan_x64() {
     log_success "Built $backend_name -> $install_path"
 }
 
-# Build llama.cpp for Linux x64 (CPU)
+# Build llama.cpp for Linux x64 (CPU with Intel optimizations)
 build_linux_x64() {
     local backend_name="linux-x64"
     local build_path="$BUILD_DIR/$backend_name"
     local install_path="$INSTALL_DIR/$backend_name"
     
-    log_info "Building llama.cpp for Linux x64 (CPU)..."
+    log_info "Building llama.cpp for Linux x64 (CPU with Intel optimizations)..."
     
     if [ "$CLEAN_BUILD" = true ]; then
         rm -rf "$build_path"
@@ -401,7 +410,15 @@ build_linux_x64() {
         -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
         -DCMAKE_INSTALL_RPATH='$ORIGIN' \
         -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
-        -DGGML_NATIVE=OFF \
+        -DGGML_NATIVE=ON \
+        -DGGML_AVX2=ON \
+        -DGGML_FMA=ON \
+        -DGGML_F16C=ON \
+        -DGGML_SSE42=ON \
+        -DGGML_BMI2=ON \
+        -DGGML_CPU_REPACK=ON \
+        -DCMAKE_C_FLAGS="-march=native -mtune=native -O3 -fno-finite-math-only" \
+        -DCMAKE_CXX_FLAGS="-march=native -mtune=native -O3 -fno-finite-math-only" \
         -DLLAMA_BUILD_EXAMPLES=OFF \
         -DLLAMA_BUILD_TESTS=OFF \
         -DLLAMA_BUILD_TOOLS=ON \
@@ -440,7 +457,15 @@ build_linux_vulkan_x64() {
         -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
         -DCMAKE_INSTALL_RPATH='$ORIGIN' \
         -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
-        -DGGML_NATIVE=OFF \
+        -DGGML_NATIVE=ON \
+        -DGGML_AVX2=ON \
+        -DGGML_FMA=ON \
+        -DGGML_F16C=ON \
+        -DGGML_SSE42=ON \
+        -DGGML_BMI2=ON \
+        -DGGML_CPU_REPACK=ON \
+        -DCMAKE_C_FLAGS="-march=native -mtune=native -O3 -fno-finite-math-only" \
+        -DCMAKE_CXX_FLAGS="-march=native -mtune=native -O3 -fno-finite-math-only" \
         -DGGML_VULKAN=ON \
         -DLLAMA_BUILD_EXAMPLES=OFF \
         -DLLAMA_BUILD_TESTS=OFF \
