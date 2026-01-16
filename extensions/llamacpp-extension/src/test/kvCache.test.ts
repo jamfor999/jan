@@ -12,7 +12,8 @@ vi.mock('@janhq/core', async () => {
     ...actual,
     getJanDataFolderPath: vi.fn().mockResolvedValue('/path/to/jan'),
     joinPath: vi.fn().mockImplementation((paths: string[]) => {
-      return Promise.resolve(paths.join('/'))
+      const result = paths.filter(p => p != null).join('/')
+      return Promise.resolve(result)
     }),
     fs: {
       existsSync: vi.fn(),
@@ -67,6 +68,14 @@ describe('llamacpp_extension KV Cache Methods', () => {
   beforeEach(async () => {
     vi.clearAllMocks()
     extension = new llamacpp_extension()
+    
+    // Re-apply our custom mocks after each test since afterEach restores them
+    const { getJanDataFolderPath, joinPath, fs } = await import('@janhq/core')
+    vi.mocked(getJanDataFolderPath).mockResolvedValue('/path/to/jan')
+    vi.mocked(joinPath).mockImplementation((paths: string[]) => {
+      const result = paths.filter(p => p != null).join('/')
+      return Promise.resolve(result)
+    })
     
     const { invoke } = await import('@tauri-apps/api/core')
     
@@ -244,8 +253,11 @@ describe('llamacpp_extension KV Cache Methods', () => {
         })
       )
 
-      // Verify conversation data was written (just check that writeTextFile was called)
-      expect(fs.writeTextFile).toHaveBeenCalled()
+      // Verify conversation data was written to correct path
+      expect(fs.writeTextFile).toHaveBeenCalledWith(
+        '/path/to/jan/dumps/test-conversation.json',
+        expect.stringContaining('"modelId": "test-model"')
+      )
       
       // Verify the JSON content contains the expected data
       const writeCall = vi.mocked(fs.writeTextFile).mock.calls[0]
@@ -273,7 +285,7 @@ describe('llamacpp_extension KV Cache Methods', () => {
 
       await extension.saveConversationDump('test-model', 'test-conversation', mockMessages)
 
-      expect(fs.mkdir).toHaveBeenCalled()
+      expect(fs.mkdir).toHaveBeenCalledWith('/path/to/jan/dumps')
     })
 
     it('should throw error if KV cache save fails', async () => {
