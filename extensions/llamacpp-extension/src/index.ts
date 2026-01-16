@@ -22,6 +22,8 @@ import {
   AppEvent,
   DownloadEvent,
   chatCompletionRequestMessage,
+  Thread,
+  ThreadAssistantInfo,
 } from '@janhq/core'
 
 import { error, info, warn } from '@tauri-apps/plugin-log'
@@ -2530,15 +2532,59 @@ export default class llamacpp_extension extends AIEngine {
    * @returns Promise<void>
    */
   async saveConversationDump(
-    modelId: string, 
+    modelId: string,
     filename: string, 
-    messages: chatCompletionRequestMessage[]
+    messages: chatCompletionRequestMessage[],
+    threadId?: string,
+    requestOptions?: Partial<chatCompletionRequest>
   ): Promise<void> {
     try {
       // First save the KV cache
       await this.saveKvCache(modelId, filename)
 
-      // Then save the conversation messages
+      // Capture complete conversation context
+      let threadContext: any = null
+      let assistantContext: any = null
+      const inferenceContext = requestOptions || null
+
+      if (threadId) {
+        try {
+          // Get conversational extension for thread operations
+          const conversationalExtension = (global as any).window?.core?.extensionManager?.getByName('@janhq/conversational-extension')
+          
+          if (conversationalExtension) {
+            // Capture thread context
+            const thread = await conversationalExtension.getThread(threadId)
+            if (thread) {
+              threadContext = {
+                id: thread.id,
+                title: thread.title,
+                assistants: thread.assistants,
+                metadata: thread.metadata || {}
+              }
+
+              // Capture assistant context
+              const threadAssistant = await conversationalExtension.getThreadAssistant(threadId)
+              if (threadAssistant) {
+                assistantContext = {
+                  id: threadAssistant.id,
+                  name: threadAssistant.name,
+                  model: threadAssistant.model,
+                  instructions: threadAssistant.instructions,
+                  tools: threadAssistant.tools || [],
+                  // Include all assistant settings that could affect conversation behavior
+                  settings: threadAssistant.settings || {}
+                }
+              }
+            }
+          }
+        } catch (error) {
+          logger.warn(`Could not capture thread/assistant context: ${error}`)
+          // Continue with save even if context capture fails
+        }
+      }
+
+      // Then save the conversation with complete context
       const janDataFolderPath = await getJanDataFolderPath()
       const dumpsDir = await joinPath([janDataFolderPath, 'dumps'])
       
@@ -2549,14 +2595,21 @@ export default class llamacpp_extension extends AIEngine {
 
       const messagesPath = await joinPath([dumpsDir, `${filename}.json`])
       const conversationData = {
+        // Basic data (backwards compatible)
         modelId,
         timestamp: new Date().toISOString(),
         messages,
+        
+        // Enhanced context (new)
+        formatVersion: "1.0.0",
+        threadContext,
+        assistantContext, 
+        inferenceContext
       }
 
       await fs.writeTextFile(messagesPath, JSON.stringify(conversationData, null, 2))
       
-      logger.info(`Successfully saved conversation dump: ${filename}`)
+      logger.info(`Successfully saved conversation dump with enhanced context: ${filename}`)
     } catch (error) {
       logger.error(`Failed to save conversation dump: ${error}`)
       throw error
@@ -2564,15 +2617,26 @@ export default class llamacpp_extension extends AIEngine {
   }
 
   /**
-   * Restore conversation dump (messages + KV cache)
+   * Restore conversation dump with enhanced context and drift detection
    * @param modelId - The model ID
    * @param filename - The base filename (without extension)
-   * @returns Promise<chatCompletionRequestMessage[]> - The restored messages
+   * @param threadId - Optional thread ID for drift detection
+   * @returns Promise with messages and context restoration info
    */
   async restoreConversationDump(
     modelId: string, 
-    filename: string
-  ): Promise<chatCompletionRequestMessage[]> {
+    filename: string,
+    threadId?: string
+  ): Promise<{
+    messages: chatCompletionRequestMessage[],
+    contextRestored: boolean,
+    driftDetected: boolean,
+    restoredContext?: {
+      threadContext?: any,
+      assistantContext?: any,
+      inferenceContext?: any
+    }
+  }> {
     try {
       // First restore the conversation messages
       const janDataFolderPath = await getJanDataFolderPath()
@@ -2589,11 +2653,93 @@ export default class llamacpp_extension extends AIEngine {
         throw new Error(`Invalid conversation dump format: ${filename}.json`)
       }
 
+      let contextRestored = false
+      let driftDetected = false
+
+      // Enhanced context restoration and drift detection
+      if (conversationData.threadContext || conversationData.assistantContext) {
+        try {
+          if (threadId) {
+            const conversationalExtension = (global as any).window?.core?.extensionManager?.getByName('@janhq/conversational-extension')
+            
+            if (conversationalExtension) {
+              // Check for configuration drift
+              if (conversationData.threadContext || conversationData.assistantContext) {
+                const currentThread = await conversationalExtension.getThread(threadId)
+                const currentAssistant = await conversationalExtension.getThreadAssistant(threadId)
+
+                // Detect drift in thread settings
+                if (conversationData.threadContext && currentThread) {
+                  const titleDrift = currentThread.title !== conversationData.threadContext.title
+                  const assistantsDrift = JSON.stringify(currentThread.assistants) !== JSON.stringify(conversationData.threadContext.assistants)
+                  
+                  if (titleDrift || assistantsDrift) {
+                    driftDetected = true
+                    logger.info(`Thread configuration drift detected for ${threadId}`)
+                  }
+                }
+
+                // Detect drift in assistant settings  
+                if (conversationData.assistantContext && currentAssistant) {
+                  const modelDrift = currentAssistant.model !== conversationData.assistantContext.model
+                  const instructionsDrift = currentAssistant.instructions !== conversationData.assistantContext.instructions
+                  const toolsDrift = JSON.stringify(currentAssistant.tools || []) !== JSON.stringify(conversationData.assistantContext.tools || [])
+                  
+                  if (modelDrift || instructionsDrift || toolsDrift) {
+                    driftDetected = true
+                    logger.info(`Assistant configuration drift detected for ${threadId}`)
+                  }
+                }
+
+                // Restore saved context if drift detected
+                if (driftDetected) {
+                  // Restore thread context
+                  if (conversationData.threadContext && currentThread) {
+                    await conversationalExtension.updateThread(threadId, {
+                      title: conversationData.threadContext.title,
+                      assistants: conversationData.threadContext.assistants,
+                      metadata: { ...currentThread.metadata, ...conversationData.threadContext.metadata }
+                    })
+                  }
+
+                  // Restore assistant context
+                  if (conversationData.assistantContext && currentAssistant) {
+                    await conversationalExtension.updateThreadAssistant(threadId, {
+                      ...currentAssistant,
+                      model: conversationData.assistantContext.model,
+                      instructions: conversationData.assistantContext.instructions,
+                      tools: conversationData.assistantContext.tools || [],
+                      settings: { ...currentAssistant.settings, ...conversationData.assistantContext.settings }
+                    })
+                  }
+
+                  contextRestored = true
+                  logger.info(`Successfully restored context for thread ${threadId}`)
+                }
+              }
+            }
+          }
+        } catch (error) {
+          logger.warn(`Could not restore context: ${error}`)
+          // Continue with restore even if context restoration fails
+        }
+      }
+
       // Then restore the KV cache
       await this.restoreKvCache(modelId, filename)
 
       logger.info(`Successfully restored conversation dump: ${filename}`)
-      return conversationData.messages
+      
+      return {
+        messages: conversationData.messages,
+        contextRestored,
+        driftDetected,
+        restoredContext: {
+          threadContext: conversationData.threadContext,
+          assistantContext: conversationData.assistantContext,
+          inferenceContext: conversationData.inferenceContext
+        }
+      }
     } catch (error) {
       logger.error(`Failed to restore conversation dump: ${error}`)
       throw error
