@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { createFileRoute, useParams, redirect, useNavigate } from '@tanstack/react-router'
 import cloneDeep from 'lodash.clonedeep'
 import { cn } from '@/lib/utils'
@@ -15,6 +15,7 @@ import { StreamingContent } from '@/containers/StreamingContent'
 import { useMessages } from '@/hooks/useMessages'
 import { useServiceHub } from '@/hooks/useServiceHub'
 import DropdownAssistant from '@/containers/DropdownAssistant'
+import KvCacheButtons from '@/containers/KvCacheButtons'
 import { useAssistant } from '@/hooks/useAssistant'
 import { useInterfaceSettings } from '@/hooks/useInterfaceSettings'
 import { ContentType, ThreadMessage } from '@janhq/core'
@@ -233,7 +234,11 @@ function ThreadDetail() {
           <div className="flex-1 flex justify-center">
             {threadId === TEMPORARY_CHAT_ID && <TemporaryChatIndicator t={t} />}
           </div>
-          <div></div>
+          <div>
+            {threadId !== TEMPORARY_CHAT_ID && (
+              <KvCacheButtons threadId={threadId} />
+            )}
+          </div>
         </div>
       </HeaderPage>
       <div className="flex flex-col h-[calc(100%-40px)]">

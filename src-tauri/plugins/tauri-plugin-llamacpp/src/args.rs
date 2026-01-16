@@ -118,6 +118,9 @@ impl ArgumentBuilder {
         // Boolean flags
         self.add_boolean_flags();
 
+        // KV cache slot save path for save/restore functionality
+        self.add_slot_save_path();
+
         // Embedding vs text generation specific args
         if self.is_embedding {
             self.add_embedding_args();
@@ -306,6 +309,11 @@ impl ArgumentBuilder {
             self.args.push("--rope-freq-scale".to_string());
             self.args.push(self.config.rope_freq_scale.to_string());
         }
+    }
+
+    fn add_slot_save_path(&mut self) {
+        self.args.push("--slot-save-path".to_string());
+        self.args.push("dumps".to_string());
     }
 }
 

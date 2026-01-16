@@ -2399,4 +2399,228 @@ export default class llamacpp_extension extends AIEngine {
     )
     return imageCount * estimatedTokensPerImage - imageCount // remove the lingering <__image__> placeholder token
   }
+
+  /**
+   * Save KV cache for a loaded model
+   * @param modelId - The model ID whose KV cache to save
+   * @param filename - The filename for the save file (without .bin extension)
+   * @returns Promise<void>
+   */
+  async saveKvCache(modelId: string, filename: string): Promise<void> {
+    const sessionInfo = await this.findSessionByModel(modelId)
+    if (!sessionInfo) {
+      throw new Error(`No active session found for model: ${modelId}`)
+    }
+
+    // Check if the process is alive
+    const result = await invoke<boolean>('plugin:llamacpp|is_process_running', {
+      pid: sessionInfo.pid,
+    })
+    if (!result) {
+      throw new Error('Model process has crashed! Please reload!')
+    }
+
+    try {
+      await fetch(`http://localhost:${sessionInfo.port}/health`)
+    } catch (e) {
+      this.unload(sessionInfo.model_id)
+      throw new Error('Model appears to have crashed! Please reload!')
+    }
+
+    // llama.cpp typically uses slot 0 for single-session inference
+    const slotId = 0
+    const baseUrl = `http://localhost:${sessionInfo.port}`
+    const url = `${baseUrl}/slots/${slotId}?action=save`
+    
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${sessionInfo.api_key}`,
+    }
+
+    const body = JSON.stringify({
+      filename: `${filename}.bin`
+    })
+
+    logger.info(`Saving KV cache for model ${modelId} to ${filename}.bin`)
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body,
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => null)
+      throw new Error(
+        `KV cache save failed with status ${response.status}: ${JSON.stringify(
+          errorData
+        )}`
+      )
+    }
+
+    logger.info(`Successfully saved KV cache for model ${modelId}`)
+  }
+
+  /**
+   * Restore KV cache for a loaded model
+   * @param modelId - The model ID whose KV cache to restore
+   * @param filename - The filename of the save file (without .bin extension)
+   * @returns Promise<void>
+   */
+  async restoreKvCache(modelId: string, filename: string): Promise<void> {
+    const sessionInfo = await this.findSessionByModel(modelId)
+    if (!sessionInfo) {
+      throw new Error(`No active session found for model: ${modelId}`)
+    }
+
+    // Check if the process is alive
+    const result = await invoke<boolean>('plugin:llamacpp|is_process_running', {
+      pid: sessionInfo.pid,
+    })
+    if (!result) {
+      throw new Error('Model process has crashed! Please reload!')
+    }
+
+    try {
+      await fetch(`http://localhost:${sessionInfo.port}/health`)
+    } catch (e) {
+      this.unload(sessionInfo.model_id)
+      throw new Error('Model appears to have crashed! Please reload!')
+    }
+
+    // llama.cpp typically uses slot 0 for single-session inference
+    const slotId = 0
+    const baseUrl = `http://localhost:${sessionInfo.port}`
+    const url = `${baseUrl}/slots/${slotId}?action=restore`
+    
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${sessionInfo.api_key}`,
+    }
+
+    const body = JSON.stringify({
+      filename: `${filename}.bin`
+    })
+
+    logger.info(`Restoring KV cache for model ${modelId} from ${filename}.bin`)
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body,
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => null)
+      throw new Error(
+        `KV cache restore failed with status ${response.status}: ${JSON.stringify(
+          errorData
+        )}`
+      )
+    }
+
+    logger.info(`Successfully restored KV cache for model ${modelId}`)
+  }
+
+  /**
+   * Save conversation dump (messages + KV cache)
+   * @param modelId - The model ID 
+   * @param filename - The base filename (without extension)
+   * @param messages - The conversation messages to save
+   * @returns Promise<void>
+   */
+  async saveConversationDump(
+    modelId: string, 
+    filename: string, 
+    messages: chatCompletionRequestMessage[]
+  ): Promise<void> {
+    try {
+      // First save the KV cache
+      await this.saveKvCache(modelId, filename)
+
+      // Then save the conversation messages
+      const janDataFolderPath = await getJanDataFolderPath()
+      const dumpsDir = await joinPath([janDataFolderPath, 'dumps'])
+      
+      // Ensure dumps directory exists
+      if (!(await fs.existsSync(dumpsDir))) {
+        await fs.mkdir(dumpsDir)
+      }
+
+      const messagesPath = await joinPath([dumpsDir, `${filename}.json`])
+      const conversationData = {
+        modelId,
+        timestamp: new Date().toISOString(),
+        messages,
+      }
+
+      await fs.writeTextFile(messagesPath, JSON.stringify(conversationData, null, 2))
+      
+      logger.info(`Successfully saved conversation dump: ${filename}`)
+    } catch (error) {
+      logger.error(`Failed to save conversation dump: ${error}`)
+      throw error
+    }
+  }
+
+  /**
+   * Restore conversation dump (messages + KV cache)
+   * @param modelId - The model ID
+   * @param filename - The base filename (without extension)
+   * @returns Promise<chatCompletionRequestMessage[]> - The restored messages
+   */
+  async restoreConversationDump(
+    modelId: string, 
+    filename: string
+  ): Promise<chatCompletionRequestMessage[]> {
+    try {
+      // First restore the conversation messages
+      const janDataFolderPath = await getJanDataFolderPath()
+      const dumpsDir = await joinPath([janDataFolderPath, 'dumps'])
+      const messagesPath = await joinPath([dumpsDir, `${filename}.json`])
+
+      if (!(await fs.existsSync(messagesPath))) {
+        throw new Error(`Conversation dump not found: ${filename}.json`)
+      }
+
+      const conversationData = JSON.parse(await fs.readTextFile(messagesPath))
+      
+      if (!conversationData.messages) {
+        throw new Error(`Invalid conversation dump format: ${filename}.json`)
+      }
+
+      // Then restore the KV cache
+      await this.restoreKvCache(modelId, filename)
+
+      logger.info(`Successfully restored conversation dump: ${filename}`)
+      return conversationData.messages
+    } catch (error) {
+      logger.error(`Failed to restore conversation dump: ${error}`)
+      throw error
+    }
+  }
+
+  /**
+   * List available conversation dumps
+   * @returns Promise<string[]> - List of available dump filenames (without extensions)
+   */
+  async listConversationDumps(): Promise<string[]> {
+    try {
+      const janDataFolderPath = await getJanDataFolderPath()
+      const dumpsDir = await joinPath([janDataFolderPath, 'dumps'])
+      
+      if (!(await fs.existsSync(dumpsDir))) {
+        return []
+      }
+
+      const files = await fs.readdirSync(dumpsDir)
+      const jsonFiles = files.filter(file => file.endsWith('.json'))
+      
+      // Return filenames without .json extension
+      return jsonFiles.map(file => file.replace('.json', ''))
+    } catch (error) {
+      logger.error(`Failed to list conversation dumps: ${error}`)
+      return []
+    }
+  }
 }
