@@ -95,7 +95,8 @@ export async function loadLlamaModel(
   timeout: number = 600
 ): Promise<SessionInfo> {
   const config = normalizeLlamacppConfig(cfg)
-  return await invoke('plugin:llamacpp|load_llama_model', {
+  console.log('loadLlamaModel called with janDataFolderPath:', janDataFolderPath)
+  const payload = {
     backendPath,
     modelId,
     modelPath,
@@ -106,7 +107,9 @@ export async function loadLlamaModel(
     isEmbedding,
     timeout,
     janDataFolderPath,
-  })
+  }
+  console.log('Tauri invoke payload:', JSON.stringify(payload, null, 2))
+  return await invoke('plugin:llamacpp|load_llama_model', payload)
 }
 
 export async function unloadLlamaModel(pid: number): Promise<UnloadResult> {
