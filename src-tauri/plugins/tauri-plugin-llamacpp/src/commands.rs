@@ -47,7 +47,6 @@ pub async fn load_llama_model<R: Runtime>(
     port: u16,
     config: LlamacppConfig,
     envs: HashMap<String, String>,
-    jan_data_folder_path: String,
     mmproj_path: Option<String>,
     is_embedding: bool,
     timeout: u64,
@@ -57,6 +56,14 @@ pub async fn load_llama_model<R: Runtime>(
 
     log::info!("Attempting to launch server at path: {:?}", backend_path);
     log::info!("Using configuration: {:?}", config);
+    
+    // Get Jan data folder path from app handle
+    let jan_data_folder_path = app_handle.path().app_data_dir()
+        .map_err(|e| ServerError::InvalidArgument(format!("Failed to get app data dir: {}", e)))?
+        .to_string_lossy()
+        .to_string();
+    
+    log::info!("Jan data folder path: {:?}", jan_data_folder_path);
 
     let bin_path = validate_binary_path(backend_path)?;
 

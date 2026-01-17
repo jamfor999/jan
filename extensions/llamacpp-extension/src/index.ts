@@ -1581,7 +1581,6 @@ export default class llamacpp_extension extends AIEngine {
     const backendPath = await getBackendExePath(backend, version)
 
     try {
-      logger.info('About to call loadLlamaModel with janDataFolderPath:', janDataFolderPath)
       const sInfo = await loadLlamaModel(
         backendPath,
         modelId,
@@ -1589,7 +1588,6 @@ export default class llamacpp_extension extends AIEngine {
         port,
         cfg,
         envs,
-        janDataFolderPath,
         mmprojPath,
         isEmbedding,
         Number(this.timeout)

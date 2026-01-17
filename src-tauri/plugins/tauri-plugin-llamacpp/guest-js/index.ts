@@ -89,13 +89,11 @@ export async function loadLlamaModel(
   port: number,
   cfg: LlamacppConfig,
   envs: Record<string, string>,
-  janDataFolderPath: string,
   mmprojPath?: string,
   isEmbedding: boolean = false,
   timeout: number = 600
 ): Promise<SessionInfo> {
   const config = normalizeLlamacppConfig(cfg)
-  console.log('loadLlamaModel called with janDataFolderPath:', janDataFolderPath)
   const payload = {
     backendPath,
     modelId,
@@ -106,7 +104,6 @@ export async function loadLlamaModel(
     mmprojPath,
     isEmbedding,
     timeout,
-    janDataFolderPath,
   }
   console.log('Tauri invoke payload:', JSON.stringify(payload, null, 2))
   return await invoke('plugin:llamacpp|load_llama_model', payload)
