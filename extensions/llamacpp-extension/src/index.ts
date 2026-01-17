@@ -1588,6 +1588,7 @@ export default class llamacpp_extension extends AIEngine {
         port,
         cfg,
         envs,
+        janDataFolderPath,
         mmprojPath,
         isEmbedding,
         Number(this.timeout)

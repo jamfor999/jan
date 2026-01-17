@@ -43,10 +43,11 @@ pub struct ArgumentBuilder {
     config: LlamacppConfig,
     backend: String,
     is_embedding: bool,
+    data_folder_path: String,
 }
 
 impl ArgumentBuilder {
-    pub fn new(config: LlamacppConfig, is_embedding: bool) -> Result<Self, String> {
+    pub fn new(config: LlamacppConfig, is_embedding: bool, data_folder_path: String) -> Result<Self, String> {
         let backend = config
             .version_backend
             .split('/')
@@ -59,6 +60,7 @@ impl ArgumentBuilder {
             config,
             backend,
             is_embedding,
+            data_folder_path,
         })
     }
 
@@ -312,8 +314,22 @@ impl ArgumentBuilder {
     }
 
     fn add_slot_save_path(&mut self) {
-        self.args.push("--slot-save-path".to_string());
-        self.args.push("dumps".to_string());
+        // Get the Jan data folder path and create the dumps directory path
+        let dumps_path = std::path::Path::new(&self.data_folder_path).join("dumps");
+        
+        // Create the dumps directory if it doesn't exist
+        if let Err(e) = std::fs::create_dir_all(&dumps_path) {
+            log::warn!("Failed to create dumps directory: {}", e);
+            return;
+        }
+        
+        // Convert path to string and add to arguments
+        if let Some(dumps_path_str) = dumps_path.to_str() {
+            self.args.push("--slot-save-path".to_string());
+            self.args.push(dumps_path_str.to_string());
+        } else {
+            log::warn!("Failed to convert dumps path to string");
+        }
     }
 }
 
@@ -367,7 +383,7 @@ mod tests {
         config.threads = 4;
         config.ctx_size = 2048;
 
-        let builder = ArgumentBuilder::new(config, false).unwrap();
+        let builder = ArgumentBuilder::new(config, false, "/test/data".to_string()).unwrap();
         let args = builder.build("test-model", "/path/to/model", 8080, None);
 
         assert!(args.contains(&"--no-webui".to_string()));
@@ -379,7 +395,7 @@ mod tests {
     #[test]
     fn test_embedding_mode() {
         let config = default_config();
-        let builder = ArgumentBuilder::new(config, true).unwrap();
+        let builder = ArgumentBuilder::new(config, true, "/test/data".to_string()).unwrap();
         let args = builder.build("embed-model", "/path/to/model", 8080, None);
 
         assert!(args.contains(&"--embedding".to_string()));
@@ -393,7 +409,7 @@ mod tests {
         config.version_backend = "v1.0/ik-backend".to_string();
         config.flash_attn = "on".to_string();
 
-        let builder = ArgumentBuilder::new(config, false).unwrap();
+        let builder = ArgumentBuilder::new(config, false, "/test/data".to_string()).unwrap();
         let args = builder.build("test", "/path", 8080, None);
 
         assert!(args.contains(&"-fa".to_string()));
@@ -403,7 +419,7 @@ mod tests {
     #[test]
     fn test_empty_strings_not_added() {
         let config = default_config();
-        let builder = ArgumentBuilder::new(config, false).unwrap();
+        let builder = ArgumentBuilder::new(config, false, "/test/data".to_string()).unwrap();
         let args = builder.build("test", "/path", 8080, None);
 
         // Empty strings should not result in empty arguments

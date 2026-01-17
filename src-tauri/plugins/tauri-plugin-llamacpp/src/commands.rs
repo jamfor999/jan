@@ -47,6 +47,7 @@ pub async fn load_llama_model<R: Runtime>(
     port: u16,
     config: LlamacppConfig,
     envs: HashMap<String, String>,
+    jan_data_folder_path: String,
     mmproj_path: Option<String>,
     is_embedding: bool,
     timeout: u64,
@@ -60,7 +61,7 @@ pub async fn load_llama_model<R: Runtime>(
     let bin_path = validate_binary_path(backend_path)?;
 
     // Build arguments using the ArgumentBuilder
-    let builder = ArgumentBuilder::new(config.clone(), is_embedding)
+    let builder = ArgumentBuilder::new(config.clone(), is_embedding, jan_data_folder_path)
         .map_err(|e| ServerError::InvalidArgument(e))?;
 
     let mut args = builder.build(&model_id, &model_path, port, mmproj_path.clone());

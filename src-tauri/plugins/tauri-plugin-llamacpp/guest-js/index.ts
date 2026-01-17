@@ -89,6 +89,7 @@ export async function loadLlamaModel(
   port: number,
   cfg: LlamacppConfig,
   envs: Record<string, string>,
+  janDataFolderPath: string,
   mmprojPath?: string,
   isEmbedding: boolean = false,
   timeout: number = 600
@@ -104,6 +105,7 @@ export async function loadLlamaModel(
     mmprojPath,
     isEmbedding,
     timeout,
+    janDataFolderPath,
   })
 }
 
