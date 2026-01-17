@@ -22,6 +22,7 @@ import {
   AppEvent,
   DownloadEvent,
   chatCompletionRequestMessage,
+  ThreadMessage,
   Thread,
   ThreadAssistantInfo,
 } from '@janhq/core'
@@ -122,8 +123,10 @@ export default class llamacpp_extension extends AIEngine {
   private apiSecret: string = 'JustAskNow'
   private pendingDownloads: Map<string, Promise<void>> = new Map()
   private isConfiguringBackends: boolean = false
-  private loadingModels = new Map<string, Promise<SessionInfo>>() // Track loading promises
-  private unlistenValidationStarted?: () => void
+   private loadingModels = new Map<string, Promise<SessionInfo>>() // Track loading promises
+   private threadSlots = new Map<string, number>()
+   private unlistenValidationStarted?: () => void
+
 
   override async onLoad(): Promise<void> {
     super.onLoad() // Calls registerEngine() from AIEngine
@@ -1670,6 +1673,7 @@ export default class llamacpp_extension extends AIEngine {
     url: string,
     headers: HeadersInit,
     body: string,
+    threadId?: string,
     abortController?: AbortController
   ): AsyncIterable<chatCompletionChunk> {
     const response = await fetch(url, {
@@ -1733,6 +1737,11 @@ export default class llamacpp_extension extends AIEngine {
             const data = JSON.parse(jsonStr)
             const chunk = data as chatCompletionChunk
 
+            const slotId = (chunk as { id_slot?: number }).id_slot
+            if (threadId && typeof slotId === 'number') {
+              this.threadSlots.set(threadId, slotId)
+            }
+
             // Check for out-of-context error conditions
             if (chunk.choices?.[0]?.finish_reason === 'length') {
               // finish_reason 'length' indicates context limit was hit
@@ -1775,6 +1784,8 @@ export default class llamacpp_extension extends AIEngine {
     if (!sessionInfo) {
       throw new Error(`No active session found for model: ${opts.model}`)
     }
+
+    const threadId = (opts as { thread_id?: string }).thread_id
     // check if the process is alive
     const result = await invoke<boolean>('plugin:llamacpp|is_process_running', {
       pid: sessionInfo.pid,
@@ -1803,9 +1814,17 @@ export default class llamacpp_extension extends AIEngine {
     // chunk.prompt_progress?.cache is for past tokens already in kv cache
     opts.return_progress = true
 
+    const existingSlot = threadId ? this.threadSlots.get(threadId) : undefined
+    if (
+      typeof (opts as { slot_id?: number }).slot_id !== 'number' &&
+      typeof existingSlot === 'number'
+    ) {
+      ;(opts as { slot_id?: number }).slot_id = existingSlot
+    }
+
     const body = JSON.stringify(opts)
     if (opts.stream) {
-      return this.handleStreamingResponse(url, headers, body, abortController)
+      return this.handleStreamingResponse(url, headers, body, threadId, abortController)
     }
     // Handle non-streaming response
     const response = await fetch(url, {
@@ -1825,6 +1844,10 @@ export default class llamacpp_extension extends AIEngine {
     }
 
     const completionResponse = (await response.json()) as chatCompletion
+    const slotId = (completionResponse as { id_slot?: number }).id_slot
+    if (threadId && typeof slotId === 'number') {
+      this.threadSlots.set(threadId, slotId)
+    }
 
     // Check for out-of-context error conditions
     if (completionResponse.choices?.[0]?.finish_reason === 'length') {
@@ -2408,10 +2431,21 @@ export default class llamacpp_extension extends AIEngine {
    * @param filename - The filename for the save file (without .bin extension)
    * @returns Promise<void>
    */
-  async saveKvCache(modelId: string, filename: string): Promise<void> {
+  async saveKvCache(modelId: string, filename: string, threadId?: string): Promise<void> {
     const sessionInfo = await this.findSessionByModel(modelId)
     if (!sessionInfo) {
       throw new Error(`No active session found for model: ${modelId}`)
+    }
+
+    let slotId = 0
+    if (threadId) {
+      const existingSlot = this.threadSlots.get(threadId)
+      if (typeof existingSlot !== 'number') {
+        logger.warn(`No active slot found for thread: ${threadId}. Falling back to slot 0.`)
+        slotId = 0
+      } else {
+        slotId = existingSlot
+      }
     }
 
     // Check if the process is alive
@@ -2429,18 +2463,16 @@ export default class llamacpp_extension extends AIEngine {
       throw new Error('Model appears to have crashed! Please reload!')
     }
 
-    // llama.cpp typically uses slot 0 for single-session inference
-    const slotId = 0
     const baseUrl = `http://localhost:${sessionInfo.port}`
     const url = `${baseUrl}/slots/${slotId}?action=save`
-    
+
     const headers = {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${sessionInfo.api_key}`,
     }
 
     const body = JSON.stringify({
-      filename: `${filename}.bin`
+      filename: `${filename}.bin`,
     })
 
     logger.info(`Saving KV cache for model ${modelId} to ${filename}.bin`)
@@ -2469,10 +2501,33 @@ export default class llamacpp_extension extends AIEngine {
    * @param filename - The filename of the save file (without .bin extension)
    * @returns Promise<void>
    */
-  async restoreKvCache(modelId: string, filename: string): Promise<void> {
+  async restoreKvCache(
+    modelId: string,
+    filename: string,
+    threadId?: string,
+    slotId?: number,
+    allowMissingSlot: boolean = false
+  ): Promise<number | undefined> {
     const sessionInfo = await this.findSessionByModel(modelId)
     if (!sessionInfo) {
       throw new Error(`No active session found for model: ${modelId}`)
+    }
+
+    let slotIdValue = typeof slotId === 'number' ? slotId : 0
+    if (threadId) {
+      const existingSlot = this.threadSlots.get(threadId)
+      if (typeof existingSlot !== 'number') {
+        if (!allowMissingSlot) {
+          throw new Error(`No active slot found for thread: ${threadId}`)
+        }
+        slotIdValue = typeof slotId === 'number' ? slotId : 0
+      } else {
+        slotIdValue = existingSlot
+      }
+    }
+
+    if (threadId && typeof slotId === 'number') {
+      this.threadSlots.set(threadId, slotId)
     }
 
     // Check if the process is alive
@@ -2490,18 +2545,16 @@ export default class llamacpp_extension extends AIEngine {
       throw new Error('Model appears to have crashed! Please reload!')
     }
 
-    // llama.cpp typically uses slot 0 for single-session inference
-    const slotId = 0
     const baseUrl = `http://localhost:${sessionInfo.port}`
-    const url = `${baseUrl}/slots/${slotId}?action=restore`
-    
+    const url = `${baseUrl}/slots/${slotIdValue}?action=restore`
+
     const headers = {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${sessionInfo.api_key}`,
     }
 
     const body = JSON.stringify({
-      filename: `${filename}.bin`
+      filename: `${filename}.bin`,
     })
 
     logger.info(`Restoring KV cache for model ${modelId} from ${filename}.bin`)
@@ -2512,16 +2565,24 @@ export default class llamacpp_extension extends AIEngine {
       body,
     })
 
+    const responseData = await response.json().catch(() => null)
+
     if (!response.ok) {
-      const errorData = await response.json().catch(() => null)
       throw new Error(
         `KV cache restore failed with status ${response.status}: ${JSON.stringify(
-          errorData
+          responseData
         )}`
       )
     }
 
-    logger.info(`Successfully restored KV cache for model ${modelId}`)
+    const restoredSlotId = responseData?.id_slot
+    if (typeof restoredSlotId === 'number') {
+      logger.info(`Restored KV cache for model ${modelId} in slot ${restoredSlotId}`)
+    } else {
+      logger.info(`Successfully restored KV cache for model ${modelId}`)
+    }
+
+    return typeof restoredSlotId === 'number' ? restoredSlotId : undefined
   }
 
   /**
@@ -2534,13 +2595,15 @@ export default class llamacpp_extension extends AIEngine {
   async saveConversationDump(
     modelId: string,
     filename: string, 
-    messages: chatCompletionRequestMessage[],
-    threadId?: string,
+    messages: ThreadMessage[],
+    threadId: string,
     requestOptions?: Partial<chatCompletionRequest>
   ): Promise<void> {
     try {
+      const safeFilename = await this.normalizeDumpName(filename)
+
       // First save the KV cache
-      await this.saveKvCache(modelId, filename)
+      await this.saveKvCache(modelId, safeFilename, threadId)
 
       // Capture complete conversation context
       let threadContext: any = null
@@ -2550,31 +2613,21 @@ export default class llamacpp_extension extends AIEngine {
       if (threadId) {
         try {
           // Get conversational extension for thread operations
-          const conversationalExtension = (global as any).window?.core?.extensionManager?.getByName('@janhq/conversational-extension')
+            const conversationalExtension = (globalThis as any).window?.core?.extensionManager?.getByName('@janhq/conversational-extension')
+
           
           if (conversationalExtension) {
             // Capture thread context
-            const thread = await conversationalExtension.getThread(threadId)
-            if (thread) {
-              threadContext = {
-                id: thread.id,
-                title: thread.title,
-                assistants: thread.assistants,
-                metadata: thread.metadata || {}
-              }
-
-              // Capture assistant context
-              const threadAssistant = await conversationalExtension.getThreadAssistant(threadId)
-              if (threadAssistant) {
-                assistantContext = {
-                  id: threadAssistant.id,
-                  name: threadAssistant.name,
-                  model: threadAssistant.model,
-                  instructions: threadAssistant.instructions,
-                  tools: threadAssistant.tools || [],
-                  // Include all assistant settings that could affect conversation behavior
-                  settings: threadAssistant.settings || {}
-                }
+            const threadAssistant = await conversationalExtension.getThreadAssistant(threadId)
+            if (threadAssistant) {
+              assistantContext = {
+                id: threadAssistant.id,
+                name: threadAssistant.name,
+                model: threadAssistant.model,
+                instructions: threadAssistant.instructions,
+                tools: threadAssistant.tools || [],
+                // Include all assistant settings that could affect conversation behavior
+                settings: threadAssistant.settings || {},
               }
             }
           }
@@ -2593,7 +2646,7 @@ export default class llamacpp_extension extends AIEngine {
         await fs.mkdir(dumpsDir)
       }
 
-      const messagesPath = await joinPath([dumpsDir, `${filename}.json`])
+      const messagesPath = await joinPath([dumpsDir, `${safeFilename}.json`])
       const conversationData = {
         // Basic data (backwards compatible)
         modelId,
@@ -2602,14 +2655,14 @@ export default class llamacpp_extension extends AIEngine {
         
         // Enhanced context (new)
         formatVersion: "1.0.0",
-        threadContext,
-        assistantContext, 
+        assistantContext,
         inferenceContext
       }
 
-      await fs.writeTextFile(messagesPath, JSON.stringify(conversationData, null, 2))
+      await fs.writeFileSync(messagesPath, JSON.stringify(conversationData, null, 2))
       
-      logger.info(`Successfully saved conversation dump with enhanced context: ${filename}`)
+      logger.info(`Successfully saved conversation dump with enhanced context: ${safeFilename}`)
+
     } catch (error) {
       logger.error(`Failed to save conversation dump: ${error}`)
       throw error
@@ -2626,96 +2679,79 @@ export default class llamacpp_extension extends AIEngine {
   async restoreConversationDump(
     modelId: string, 
     filename: string,
-    threadId?: string
+    threadId: string,
+    slotId?: number
   ): Promise<{
-    messages: chatCompletionRequestMessage[],
-    contextRestored: boolean,
-    driftDetected: boolean,
+    messages: chatCompletionRequestMessage[];
+    contextRestored: boolean;
+    driftDetected: boolean;
     restoredContext?: {
-      threadContext?: any,
-      assistantContext?: any,
-      inferenceContext?: any
-    }
+      assistantContext?: any;
+      inferenceContext?: any;
+    };
+    slotId?: number;
   }> {
     try {
       // First restore the conversation messages
+      const safeFilename = await this.normalizeDumpName(filename)
       const janDataFolderPath = await getJanDataFolderPath()
       const dumpsDir = await joinPath([janDataFolderPath, 'dumps'])
-      const messagesPath = await joinPath([dumpsDir, `${filename}.json`])
+      const messagesPath = await joinPath([dumpsDir, `${safeFilename}.json`])
 
       if (!(await fs.existsSync(messagesPath))) {
-        throw new Error(`Conversation dump not found: ${filename}.json`)
+        throw new Error(`Conversation dump not found: ${safeFilename}.json`)
       }
 
-      const conversationData = JSON.parse(await fs.readTextFile(messagesPath))
-      
+      const conversationData = JSON.parse(await fs.readFileSync(messagesPath))
+
       if (!conversationData.messages) {
-        throw new Error(`Invalid conversation dump format: ${filename}.json`)
+        throw new Error(`Invalid conversation dump format: ${safeFilename}.json`)
       }
 
       let contextRestored = false
       let driftDetected = false
 
-      // Enhanced context restoration and drift detection
-      if (conversationData.threadContext || conversationData.assistantContext) {
+      // Enhanced context restoration (no cache invalidation)
+      if (conversationData.assistantContext) {
         try {
           if (threadId) {
-            const conversationalExtension = (global as any).window?.core?.extensionManager?.getByName('@janhq/conversational-extension')
-            
+            const conversationalExtension =
+              (globalThis as any).window?.core?.extensionManager?.getByName(
+                '@janhq/conversational-extension'
+              )
+
             if (conversationalExtension) {
-              // Check for configuration drift
-              if (conversationData.threadContext || conversationData.assistantContext) {
-                const currentThread = await conversationalExtension.getThread(threadId)
-                const currentAssistant = await conversationalExtension.getThreadAssistant(threadId)
+              const currentAssistant =
+                await conversationalExtension.getThreadAssistant(threadId)
 
-                // Detect drift in thread settings
-                if (conversationData.threadContext && currentThread) {
-                  const titleDrift = currentThread.title !== conversationData.threadContext.title
-                  const assistantsDrift = JSON.stringify(currentThread.assistants) !== JSON.stringify(conversationData.threadContext.assistants)
-                  
-                  if (titleDrift || assistantsDrift) {
-                    driftDetected = true
-                    logger.info(`Thread configuration drift detected for ${threadId}`)
-                  }
-                }
+              if (currentAssistant) {
+                const modelDrift =
+                  currentAssistant.model !== conversationData.assistantContext.model
+                const instructionsDrift =
+                  currentAssistant.instructions !==
+                  conversationData.assistantContext.instructions
+                const toolsDrift =
+                  JSON.stringify(currentAssistant.tools || []) !==
+                  JSON.stringify(conversationData.assistantContext.tools || [])
 
-                // Detect drift in assistant settings  
-                if (conversationData.assistantContext && currentAssistant) {
-                  const modelDrift = currentAssistant.model !== conversationData.assistantContext.model
-                  const instructionsDrift = currentAssistant.instructions !== conversationData.assistantContext.instructions
-                  const toolsDrift = JSON.stringify(currentAssistant.tools || []) !== JSON.stringify(conversationData.assistantContext.tools || [])
-                  
-                  if (modelDrift || instructionsDrift || toolsDrift) {
-                    driftDetected = true
-                    logger.info(`Assistant configuration drift detected for ${threadId}`)
-                  }
-                }
-
-                // Restore saved context if drift detected
+                driftDetected = modelDrift || instructionsDrift || toolsDrift
                 if (driftDetected) {
-                  // Restore thread context
-                  if (conversationData.threadContext && currentThread) {
-                    await conversationalExtension.updateThread(threadId, {
-                      title: conversationData.threadContext.title,
-                      assistants: conversationData.threadContext.assistants,
-                      metadata: { ...currentThread.metadata, ...conversationData.threadContext.metadata }
-                    })
-                  }
-
-                  // Restore assistant context
-                  if (conversationData.assistantContext && currentAssistant) {
-                    await conversationalExtension.updateThreadAssistant(threadId, {
-                      ...currentAssistant,
-                      model: conversationData.assistantContext.model,
-                      instructions: conversationData.assistantContext.instructions,
-                      tools: conversationData.assistantContext.tools || [],
-                      settings: { ...currentAssistant.settings, ...conversationData.assistantContext.settings }
-                    })
-                  }
-
-                  contextRestored = true
-                  logger.info(`Successfully restored context for thread ${threadId}`)
+                  logger.info(`Assistant configuration drift detected for ${threadId}`)
                 }
+
+                await conversationalExtension.modifyThreadAssistant(threadId, {
+                  ...currentAssistant,
+                  model: conversationData.assistantContext.model,
+                  instructions: conversationData.assistantContext.instructions,
+                  tools: conversationData.assistantContext.tools || [],
+                  settings: {
+                    ...currentAssistant.settings,
+                    ...conversationData.assistantContext.settings,
+                  },
+                })
+
+                contextRestored = true
+                logger.info(`Successfully restored context for thread ${threadId}`)
               }
             }
           }
@@ -2726,21 +2762,35 @@ export default class llamacpp_extension extends AIEngine {
       }
 
       // Then restore the KV cache
-      await this.restoreKvCache(modelId, filename)
+      const restoredSlotId = await this.restoreKvCache(
+        modelId,
+        safeFilename,
+        threadId,
+        slotId,
+        true
+      )
 
-      logger.info(`Successfully restored conversation dump: ${filename}`)
-      
+      if (typeof restoredSlotId === 'number') {
+        this.threadSlots.set(threadId, restoredSlotId)
+      } else if (typeof slotId === 'number') {
+        this.threadSlots.set(threadId, slotId)
+      }
+
+      logger.info(`Successfully restored conversation dump: ${safeFilename}`)
+
       return {
         messages: conversationData.messages,
         contextRestored,
         driftDetected,
         restoredContext: {
-          threadContext: conversationData.threadContext,
           assistantContext: conversationData.assistantContext,
-          inferenceContext: conversationData.inferenceContext
-        }
+          inferenceContext: conversationData.inferenceContext,
+        },
+        slotId: restoredSlotId,
       }
+
     } catch (error) {
+
       logger.error(`Failed to restore conversation dump: ${error}`)
       throw error
     }
@@ -2758,15 +2808,62 @@ export default class llamacpp_extension extends AIEngine {
       if (!(await fs.existsSync(dumpsDir))) {
         return []
       }
-
+ 
       const files = await fs.readdirSync(dumpsDir)
-      const jsonFiles = files.filter(file => file.endsWith('.json'))
+      const jsonFiles = files
+        .map((file) => file.replace(/\\/g, '/'))
+        .filter((file) => file.endsWith('.json'))
       
       // Return filenames without .json extension
-      return jsonFiles.map(file => file.replace('.json', ''))
+      return jsonFiles.map((file) => file.replace(/^.*\//, '').replace('.json', ''))
     } catch (error) {
       logger.error(`Failed to list conversation dumps: ${error}`)
       return []
     }
+  }
+
+  async listSlots(modelId: string): Promise<{ id: number; is_processing: boolean }[]> {
+    const sessionInfo = await this.findSessionByModel(modelId)
+    if (!sessionInfo) {
+      throw new Error(`No active session found for model: ${modelId}`)
+    }
+
+    const baseUrl = `http://localhost:${sessionInfo.port}`
+    const url = `${baseUrl}/slots`
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${sessionInfo.api_key}`,
+    }
+
+    const response = await fetch(url, { headers })
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => null)
+      throw new Error(
+        `Failed to list slots: ${response.status} ${JSON.stringify(errorData)}`
+      )
+    }
+
+    const slots = (await response.json()) as Array<{ id: number; is_processing: boolean }>
+    return slots.map((slot) => ({
+      id: slot.id,
+      is_processing: slot.is_processing,
+    }))
+  }
+
+  async getIdleSlot(modelId: string): Promise<number> {
+    const slots = await this.listSlots(modelId)
+    const idleSlot = slots.find((slot) => !slot.is_processing)
+    if (!idleSlot) {
+      throw new Error('No idle slot available for restore')
+    }
+    return idleSlot.id
+  }
+
+  private async normalizeDumpName(filename: string): Promise<string> {
+    const trimmed = filename.trim()
+    if (!trimmed) {
+      throw new Error('Filename cannot be empty')
+    }
+    return trimmed.replace(/\\/g, '/').replace(/^.*\//, '').replace(/\.json$/i, '').replace(/\.bin$/i, '')
   }
 }

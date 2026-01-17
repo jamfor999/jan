@@ -15,6 +15,7 @@ import {
   IconFolder,
   IconPencil,
   IconTrash,
+  IconDatabase,
 } from '@tabler/icons-react'
 import { route } from '@/constants/routes'
 import ThreadList from './ThreadList'
@@ -22,8 +23,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+
 import { PlatformFeatures } from '@/lib/platform/const'
 import { PlatformFeature } from '@/lib/platform/types'
 import { AuthLoginButton } from '@/containers/auth/AuthLoginButton'
@@ -32,6 +35,10 @@ import { useAuth } from '@/hooks/useAuth'
 
 import { useThreads } from '@/hooks/useThreads'
 import { useThreadManagement } from '@/hooks/useThreadManagement'
+import { useModelProvider } from '@/hooks/useModelProvider'
+import { useAssistant } from '@/hooks/useAssistant'
+import { useMessages } from '@/hooks/useMessages'
+import { useServiceHub } from '@/hooks/useServiceHub'
 
 import { useTranslation } from '@/i18n/react-i18next-compat'
 import { useMemo, useState, useEffect, useRef } from 'react'
@@ -43,6 +50,36 @@ import { useClickOutside } from '@/hooks/useClickOutside'
 import { DeleteAllThreadsDialog } from '@/containers/dialogs'
 import AddProjectDialog from '@/containers/dialogs/AddProjectDialog'
 import { DeleteProjectDialog } from '@/containers/dialogs/DeleteProjectDialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { Button } from '@/components/ui/button'
+import { ThreadMessage } from '@janhq/core'
+
+interface LlamacppKvCacheExtension {
+  listConversationDumps(): Promise<string[]>
+  getIdleSlot(modelId: string): Promise<number>
+  restoreConversationDump(
+    modelId: string,
+    filename: string,
+    threadId: string,
+    slotId?: number
+  ): Promise<{
+    messages: ThreadMessage[]
+    contextRestored: boolean
+    driftDetected: boolean
+    restoredContext?: any
+    slotId?: number
+  }>
+}
 
 const mainMenus = [
   {
@@ -157,6 +194,12 @@ const LeftPanel = () => {
   const unstarAllThreads = useThreads((state) => state.unstarAllThreads)
   const getFilteredThreads = useThreads((state) => state.getFilteredThreads)
   const threads = useThreads((state) => state.threads)
+  const createThread = useThreads((state) => state.createThread)
+  const setCurrentThreadId = useThreads((state) => state.setCurrentThreadId)
+  const { selectedModel, selectedProvider, getProviderByName } = useModelProvider()
+  const { currentAssistant, assistants } = useAssistant()
+  const { setMessages } = useMessages()
+  const serviceHub = useServiceHub()
 
   const { folders, addFolder, updateFolder, getFolderById } =
     useThreadManagement()
@@ -171,6 +214,11 @@ const LeftPanel = () => {
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(
     null
   )
+  const [restoreDialogOpen, setRestoreDialogOpen] = useState(false)
+  const [confirmRestoreOpen, setConfirmRestoreOpen] = useState(false)
+  const [availableDumps, setAvailableDumps] = useState<string[]>([])
+  const [restoreFile, setRestoreFile] = useState('')
+  const [restoreLoading, setRestoreLoading] = useState(false)
 
   const filteredThreads = useMemo(() => {
     return getFilteredThreads(searchTerm)
@@ -202,6 +250,124 @@ const LeftPanel = () => {
   const handleProjectDeleteClose = () => {
     setDeleteProjectConfirmOpen(false)
     setDeletingProjectId(null)
+  }
+
+  const handleRestoreClick = async () => {
+    try {
+      const provider = getProviderByName('llamacpp')
+      if (!provider) {
+        toast.error(t('No active model engine provider'))
+        return
+      }
+
+      const extension = window.core.extensionManager.getByName(
+        '@janhq/llamacpp-extension'
+      ) as LlamacppKvCacheExtension
+      if (!extension || typeof extension.listConversationDumps !== 'function') {
+        toast.error(t('KV cache functionality not supported'))
+        return
+      }
+
+      const dumps = await extension.listConversationDumps()
+      setAvailableDumps(dumps)
+      setRestoreDialogOpen(true)
+      setRestoreFile('')
+    } catch (error) {
+      console.error('Failed to list conversation dumps:', error)
+      toast.error(t('Failed to list saved conversations'))
+    }
+  }
+
+  const handleRestoreConfirm = async () => {
+    if (!restoreFile) {
+      toast.error(t('Please select a conversation'))
+      return
+    }
+
+    if (!currentAssistant?.id) {
+      toast.error(t('No assistant selected'))
+      return
+    }
+
+    const modelId = selectedModel?.id
+    if (!modelId) {
+      toast.error(t('No model selected'))
+      return
+    }
+
+    setConfirmRestoreOpen(true)
+  }
+
+  const handleRestoreProceed = async () => {
+    try {
+      const provider = getProviderByName('llamacpp')
+      if (!provider) {
+        toast.error(t('No active model engine provider'))
+        return
+      }
+
+      const modelId = selectedModel?.id
+      if (!modelId) {
+        toast.error(t('No model selected'))
+        return
+      }
+
+      setRestoreLoading(true)
+
+      const extension = window.core.extensionManager.getByName(
+        '@janhq/llamacpp-extension'
+      ) as LlamacppKvCacheExtension
+      if (!extension || typeof extension.restoreConversationDump !== 'function') {
+        toast.error(t('KV cache functionality not supported'))
+        return
+      }
+
+      const providerName = selectedProvider || provider.provider
+      const newThread = await createThread(
+        {
+          id: modelId,
+          provider: providerName,
+        },
+        restoreFile,
+        assistants.find((assistant) => assistant.id === currentAssistant?.id) ||
+          assistants[0]
+      )
+
+      await serviceHub.models().startModel(provider, modelId)
+
+      const idleSlotId = await extension.getIdleSlot(modelId)
+      const restoreResult = await extension.restoreConversationDump(
+        modelId,
+        restoreFile,
+        newThread.id,
+        idleSlotId
+      )
+
+      if (restoreResult?.messages?.length) {
+        setMessages(newThread.id, restoreResult.messages as ThreadMessage[])
+      }
+
+      setCurrentThreadId(newThread.id)
+      navigate({ to: route.threadsDetail, params: { threadId: newThread.id } })
+
+      if (restoreResult?.contextRestored) {
+        toast.warning(
+          t(
+            'Conversation restored and assistant settings were updated to match the saved context'
+          )
+        )
+      } else {
+        toast.success(t('Conversation restored successfully'))
+      }
+
+      setRestoreDialogOpen(false)
+      setConfirmRestoreOpen(false)
+    } catch (error) {
+      console.error('Failed to restore conversation:', error)
+      toast.error(t('Failed to restore conversation'))
+    } finally {
+      setRestoreLoading(false)
+    }
   }
 
   const handleProjectSave = async (name: string) => {
@@ -382,22 +548,35 @@ const LeftPanel = () => {
                 return currentPath === menu.route
               })()
               return (
-                <Link
-                  key={menu.title}
-                  to={menu.route}
-                  onClick={() => isSmallScreen && setLeftPanel(false)}
-                  data-test-id={`menu-${menu.title}`}
-                  activeOptions={{ exact: true }}
-                  className={cn(
-                    'flex items-center gap-1.5 cursor-pointer hover:bg-left-panel-fg/10 py-1 px-1 rounded',
-                    isActive && 'bg-left-panel-fg/10'
+                <div key={menu.title}>
+                  <Link
+                    to={menu.route}
+                    onClick={() => isSmallScreen && setLeftPanel(false)}
+                    data-test-id={`menu-${menu.title}`}
+                    activeOptions={{ exact: true }}
+                    className={cn(
+                      'flex items-center gap-1.5 cursor-pointer hover:bg-left-panel-fg/10 py-1 px-1 rounded',
+                      isActive && 'bg-left-panel-fg/10'
+                    )}
+                  >
+                    <menu.icon size={18} className="text-left-panel-fg/70" />
+                    <span className="font-medium text-left-panel-fg/90">
+                      {t(menu.title)}
+                    </span>
+                  </Link>
+                  {menu.title === 'common:newChat' && (
+                    <button
+                      type="button"
+                      onClick={handleRestoreClick}
+                      className="flex items-center gap-1.5 w-full text-left text-left-panel-fg/70 hover:text-left-panel-fg hover:bg-left-panel-fg/10 py-1 px-1 rounded ml-5"
+                    >
+                      <IconDatabase size={16} />
+                      <span className="text-sm font-medium">
+                        {t('Restore Conversation')}
+                      </span>
+                    </button>
                   )}
-                >
-                  <menu.icon size={18} className="text-left-panel-fg/70" />
-                  <span className="font-medium text-left-panel-fg/90">
-                    {t(menu.title)}
-                  </span>
-                </Link>
+                </div>
               )
             })}
           </div>
@@ -458,33 +637,27 @@ const LeftPanel = () => {
                                       size={14}
                                       className="text-left-panel-fg/60 shrink-0 cursor-pointer px-0.5 -mr-1 data-[state=open]:bg-left-panel-fg/10 rounded group-hover/project-list:data-[state=closed]:size-5 size-5 data-[state=closed]:size-0"
                                       onClick={(e) => {
-                                        e.preventDefault()
                                         e.stopPropagation()
                                       }}
                                     />
                                   </DropdownMenuTrigger>
-                                  <DropdownMenuContent
-                                    side="bottom"
-                                    align="end"
-                                  >
+                                  <DropdownMenuContent align="end" className="w-40">
                                     <DropdownMenuItem
-                                      onClick={(e) => {
-                                        e.stopPropagation()
+                                      onClick={() =>
                                         setEditingProjectKey(folder.id)
-                                        setProjectDialogOpen(true)
-                                      }}
+                                      }
+                                      className="gap-2"
                                     >
-                                      <IconPencil size={16} />
-                                      <span>Edit</span>
+                                      <IconPencil size={14} />
+                                      {t('common:rename')}
                                     </DropdownMenuItem>
+                                    <DropdownMenuSeparator />
                                     <DropdownMenuItem
-                                      onClick={(e) => {
-                                        e.stopPropagation()
-                                        handleProjectDelete(folder.id)
-                                      }}
+                                      onClick={() => handleProjectDelete(folder.id)}
+                                      className="gap-2"
                                     >
-                                      <IconTrash size={16} />
-                                      <span>Delete</span>
+                                      <IconTrash size={14} />
+                                      {t('common:delete')}
                                     </DropdownMenuItem>
                                   </DropdownMenuContent>
                                 </DropdownMenu>
@@ -493,12 +666,78 @@ const LeftPanel = () => {
                           </div>
                         )
                       }
-
                       return <ProjectItem key={folder.id} />
                     })}
                 </div>
               </div>
             )}
+
+          <Dialog open={restoreDialogOpen} onOpenChange={setRestoreDialogOpen}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>{t('Restore Conversation')}</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div>
+                  <select
+                    id="restore-file"
+                    value={restoreFile}
+                    onChange={(e) => setRestoreFile(e.target.value)}
+                    aria-label={t('Select Conversation')}
+                    className="w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">{t('Choose a saved conversation')}</option>
+                    {availableDumps.map((dump) => (
+                      <option key={dump} value={dump}>
+                        {dump}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {availableDumps.length === 0 && (
+                  <p className="text-sm text-gray-500">
+                    {t('No saved conversations found')}
+                  </p>
+                )}
+                <div className="flex justify-end gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => setRestoreDialogOpen(false)}
+                    disabled={restoreLoading}
+                  >
+                    {t('Cancel')}
+                  </Button>
+                  <Button
+                    onClick={handleRestoreConfirm}
+                    disabled={
+                      restoreLoading || !restoreFile || availableDumps.length === 0
+                    }
+                  >
+                    {restoreLoading ? t('Restoring...') : t('Restore')}
+                  </Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+
+          <AlertDialog open={confirmRestoreOpen} onOpenChange={setConfirmRestoreOpen}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>{t('Restore conversation?')}</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {t(
+                    'Restoring will replace the current conversation and may reset assistant settings to match the saved context.'
+                  )}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>{t('Cancel')}</AlertDialogCancel>
+                <AlertDialogAction onClick={handleRestoreProceed}>
+                  {t('Restore')}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
 
           <div className="flex flex-col h-full overflow-y-scroll w-[calc(100%+6px)]">
             <div className="flex flex-col w-full h-full overflow-y-auto overflow-x-hidden mb-3">

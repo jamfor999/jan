@@ -1,8 +1,9 @@
 use flate2::read::GzDecoder;
 use std::{
+    collections::HashMap,
     fs::{self, File},
     io::Read,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 use tar::Archive;
@@ -45,17 +46,11 @@ pub fn install_extensions<R: Runtime>(app: tauri::AppHandle<R>, force: bool) -> 
     if std::env::var("IS_CLEAN").is_ok() {
         clean_up = true;
     }
-    log::info!("Installing extensions. Clean up: {clean_up}");
-    if !clean_up && extensions_path.exists() {
-        return Ok(());
-    }
 
-    // Attempt to remove extensions folder
-    if extensions_path.exists() {
-        fs::remove_dir_all(&extensions_path).unwrap_or_else(|_| {
-            log::info!("Failed to remove existing extensions folder, it may not exist.");
-        });
-    }
+    let replacements_disabled = std::env::var("DISABLE_EXTENSION_REPLACEMENTS").is_ok();
+    log::info!(
+        "Installing extensions. Clean up: {clean_up}, replacements disabled: {replacements_disabled}"
+    );
 
     // Attempt to create it again
     if !extensions_path.exists() {
@@ -70,6 +65,28 @@ pub fn install_extensions<R: Runtime>(app: tauri::AppHandle<R>, force: bool) -> 
     } else {
         vec![]
     };
+
+    if clean_up {
+        // Attempt to remove extensions folder
+        if extensions_path.exists() {
+            fs::remove_dir_all(&extensions_path).unwrap_or_else(|_| {
+                log::info!("Failed to remove existing extensions folder, it may not exist.");
+            });
+        }
+
+        if !extensions_path.exists() {
+            fs::create_dir_all(&extensions_path).map_err(|e| e.to_string())?;
+        }
+
+        extensions_list.clear();
+    }
+
+    let mut existing_by_name: HashMap<String, serde_json::Value> = HashMap::new();
+    for extension in extensions_list.drain(..) {
+        if let Some(name) = extension.get("name").and_then(|value| value.as_str()) {
+            existing_by_name.insert(name.to_string(), extension);
+        }
+    }
 
     for entry in fs::read_dir(&pre_install_path).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
@@ -95,35 +112,77 @@ pub fn install_extensions<R: Runtime>(app: tauri::AppHandle<R>, force: bool) -> 
 
             let extension_name = extension_name.ok_or("package.json not found in archive")?;
             let extension_dir = extensions_path.join(extension_name.clone());
-            fs::create_dir_all(&extension_dir).map_err(|e| e.to_string())?;
+            let installed_version = read_installed_extension_version(&extension_dir)
+                .unwrap_or_default();
+            let bundled_version = extension_manifest
+                .as_ref()
+                .and_then(|manifest| manifest["version"].as_str())
+                .unwrap_or("");
 
-            let tar_gz = File::open(&path).map_err(|e| e.to_string())?;
-            let gz_decoder = GzDecoder::new(tar_gz);
-            let mut archive = Archive::new(gz_decoder);
-            for entry in archive.entries().map_err(|e| e.to_string())? {
-                let mut entry = entry.map_err(|e| e.to_string())?;
-                let file_path = entry.path().map_err(|e| e.to_string())?;
-                let components: Vec<_> = file_path.components().collect();
-                if components.len() > 1 {
-                    let relative_path: PathBuf = components[1..].iter().collect();
-                    let target_path = extension_dir.join(relative_path);
-                    if let Some(parent) = target_path.parent() {
-                        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-                    }
-                    let _result = entry.unpack(&target_path).map_err(|e| e.to_string())?;
+            let bundled_modified = fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .ok();
+            let installed_modified = read_installed_extension_modified(&extension_dir);
+
+            let should_install = !replacements_disabled
+                && (clean_up
+                    || !extension_dir.exists()
+                    || is_newer_version(bundled_version, &installed_version)
+                    || bundled_version.is_empty()
+                    || is_newer_timestamp(bundled_modified, installed_modified));
+
+            let extension_origin = if should_install {
+                if extension_dir.exists() {
+                    fs::remove_dir_all(&extension_dir).unwrap_or_else(|_| {
+                        log::info!(
+                            "Failed to remove existing extension folder for {extension_name}."
+                        );
+                    });
                 }
-            }
+
+                fs::create_dir_all(&extension_dir).map_err(|e| e.to_string())?;
+
+                let tar_gz = File::open(&path).map_err(|e| e.to_string())?;
+                let gz_decoder = GzDecoder::new(tar_gz);
+                let mut archive = Archive::new(gz_decoder);
+                for entry in archive.entries().map_err(|e| e.to_string())? {
+                    let mut entry = entry.map_err(|e| e.to_string())?;
+                    let file_path = entry.path().map_err(|e| e.to_string())?;
+                    let components: Vec<_> = file_path.components().collect();
+                    if components.len() > 1 {
+                        let relative_path: PathBuf = components[1..].iter().collect();
+                        let target_path = extension_dir.join(relative_path);
+                        if let Some(parent) = target_path.parent() {
+                            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                        }
+                        let _result = entry.unpack(&target_path).map_err(|e| e.to_string())?;
+                    }
+                }
+
+                log::info!("Installed extension to {extension_dir:?}");
+                extension_dir.to_string_lossy().to_string()
+            } else {
+                existing_by_name
+                    .get(&extension_name)
+                    .and_then(|extension| extension.get("origin"))
+                    .and_then(|origin| origin.as_str())
+                    .map(|origin| origin.to_string())
+                    .unwrap_or_else(|| extension_dir.to_string_lossy().to_string())
+            };
 
             let main_entry = extension_manifest
                 .as_ref()
                 .and_then(|manifest| manifest["main"].as_str())
                 .unwrap_or("index.js");
-            let url = extension_dir.join(main_entry).to_string_lossy().to_string();
+            let url = Path::new(&extension_origin)
+                .join(main_entry)
+                .to_string_lossy()
+                .to_string();
 
             let new_extension = serde_json::json!({
                 "url": url,
                 "name": extension_name.clone(),
-                "origin": extension_dir.to_string_lossy(),
+                "origin": extension_origin,
                 "active": true,
                 "description": extension_manifest
                     .as_ref()
@@ -139,14 +198,21 @@ pub fn install_extensions<R: Runtime>(app: tauri::AppHandle<R>, force: bool) -> 
                     .unwrap_or(""),
             });
 
-            extensions_list.push(new_extension);
-
-            log::info!("Installed extension to {extension_dir:?}");
+            existing_by_name.insert(extension_name.clone(), new_extension);
         }
     }
+
+    let mut merged_extensions: Vec<serde_json::Value> =
+        existing_by_name.into_values().collect();
+    merged_extensions.sort_by(|a, b| {
+        let name_a = a.get("name").and_then(|value| value.as_str()).unwrap_or("");
+        let name_b = b.get("name").and_then(|value| value.as_str()).unwrap_or("");
+        name_a.cmp(name_b)
+    });
+
     fs::write(
         &extensions_json_path,
-        serde_json::to_string_pretty(&extensions_list).map_err(|e| e.to_string())?,
+        serde_json::to_string_pretty(&merged_extensions).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
 
@@ -231,6 +297,58 @@ pub fn extract_extension_manifest<R: Read>(
     }
 
     Ok(None)
+}
+
+fn read_installed_extension_version(extension_dir: &Path) -> Option<String> {
+    let manifest_path = extension_dir.join("package.json");
+    let contents = fs::read_to_string(manifest_path).ok()?;
+    let manifest: serde_json::Value = serde_json::from_str(&contents).ok()?;
+    manifest
+        .get("version")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+}
+
+fn is_newer_version(bundled: &str, installed: &str) -> bool {
+    let bundled_version = parse_version(bundled);
+    let installed_version = parse_version(installed);
+
+    for idx in 0..3 {
+        let bundled_part = bundled_version[idx];
+        let installed_part = installed_version[idx];
+        if bundled_part != installed_part {
+            return bundled_part > installed_part;
+        }
+    }
+
+    false
+}
+
+fn parse_version(version: &str) -> [u64; 3] {
+    let mut parts = [0_u64; 3];
+
+    for (idx, segment) in version.split('.').take(3).enumerate() {
+        let digits: String = segment.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+        parts[idx] = digits.parse::<u64>().unwrap_or(0);
+    }
+
+    parts
+}
+
+fn read_installed_extension_modified(extension_dir: &Path) -> Option<std::time::SystemTime> {
+    let extension_root = extension_dir.join("package.json");
+    fs::metadata(extension_root).and_then(|metadata| metadata.modified()).ok()
+}
+
+fn is_newer_timestamp(
+    bundled: Option<std::time::SystemTime>,
+    installed: Option<std::time::SystemTime>,
+) -> bool {
+    match (bundled, installed) {
+        (Some(bundled_time), Some(installed_time)) => bundled_time > installed_time,
+        (Some(_), None) => true,
+        _ => false,
+    }
 }
 
 pub fn setup_mcp<R: Runtime>(app: &App<R>) {
