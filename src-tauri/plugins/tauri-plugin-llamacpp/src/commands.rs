@@ -47,7 +47,7 @@ pub async fn load_llama_model<R: Runtime>(
     port: u16,
     config: LlamacppConfig,
     envs: HashMap<String, String>,
-    jan_data_folder_path: String,
+    #[serde(rename = "janDataFolderPath")] jan_data_folder_path: String,
     mmproj_path: Option<String>,
     is_embedding: bool,
     timeout: u64,
