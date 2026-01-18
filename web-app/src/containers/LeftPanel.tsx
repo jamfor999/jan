@@ -344,7 +344,18 @@ const LeftPanel = () => {
       )
 
       if (restoreResult?.messages?.length) {
-        setMessages(newThread.id, restoreResult.messages as ThreadMessage[])
+        const restoredMessages = (restoreResult.messages as ThreadMessage[]).map(
+          (message) => ({
+            ...message,
+            thread_id: newThread.id,
+          })
+        )
+        setMessages(newThread.id, restoredMessages)
+        await Promise.all(
+          restoredMessages.map((message) =>
+            serviceHub.messages().createMessage(message)
+          )
+        )
       }
 
       setCurrentThreadId(newThread.id)

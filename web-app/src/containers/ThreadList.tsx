@@ -39,12 +39,23 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { useTranslation } from '@/i18n/react-i18next-compat'
 import { memo, MouseEvent, useMemo, useState } from 'react'
 import { useNavigate, useMatches } from '@tanstack/react-router'
 import { RenameThreadDialog, DeleteThreadDialog } from '@/containers/dialogs'
 import { route } from '@/constants/routes'
 import { toast } from 'sonner'
+import { getServiceHub } from '@/hooks/useServiceHub'
 
 const SortableItem = memo(
   ({
@@ -80,9 +91,11 @@ const SortableItem = memo(
     const getFolderById = useThreadManagement().getFolderById
     const { folders } = useThreadManagement()
     const getMessages = useMessages((state) => state.getMessages)
+    const setMessages = useMessages((state) => state.setMessages)
     const { t } = useTranslation()
     const [openDropdown, setOpenDropdown] = useState(false)
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+    const [clearConfirmOpen, setClearConfirmOpen] = useState(false)
     const navigate = useNavigate()
     // Check if current route matches this thread's detail page
     const matches = useMatches()
@@ -169,6 +182,25 @@ const SortableItem = memo(
         content: lastMessage.content?.[0]?.text?.value || '',
       }
     }, [getMessages, thread.id])
+
+    const clearMessages = async () => {
+      try {
+        const messages = getMessages(thread.id)
+        await Promise.all(
+          messages.map((message) =>
+            getServiceHub().messages().deleteMessage(thread.id, message.id)
+          )
+        )
+        setMessages(thread.id, [])
+        toast.success(t('Messages cleared'))
+      } catch (error) {
+        console.error('Failed to clear messages:', error)
+        toast.error(t('Failed to clear messages'))
+      } finally {
+        setClearConfirmOpen(false)
+        setOpenDropdown(false)
+      }
+    }
 
     return (
       <div
@@ -312,6 +344,18 @@ const SortableItem = memo(
                 onSelect={(e) => {
                   e.preventDefault()
                   e.stopPropagation()
+                  setClearConfirmOpen(true)
+                  setOpenDropdown(false)
+                }}
+              >
+                <IconTrash />
+                <span>{t('Clear all messages')}</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
                   setDeleteConfirmOpen(true)
                   setOpenDropdown(false)
                 }}
@@ -330,6 +374,22 @@ const SortableItem = memo(
             onOpenChange={setDeleteConfirmOpen}
             withoutTrigger
           />
+          <AlertDialog open={clearConfirmOpen} onOpenChange={setClearConfirmOpen}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>{t('Clear all messages?')}</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {t('This will delete every message in the thread. This action cannot be undone.')}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>{t('common:cancel')}</AlertDialogCancel>
+                <AlertDialogAction onClick={clearMessages}>
+                  {t('common:delete')}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </div>
     )

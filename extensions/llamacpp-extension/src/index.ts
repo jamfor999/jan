@@ -2647,11 +2647,26 @@ export default class llamacpp_extension extends AIEngine {
       }
 
       const messagesPath = await joinPath([dumpsDir, `${safeFilename}.json`])
+      const sanitizedMessages = messages.map((message) => {
+        if (!message.metadata || !message.metadata.assistant) return message
+
+        const { assistant, ...metadata } = message.metadata
+        if (!metadata || Object.keys(metadata).length === 0) {
+          const { metadata: _metadata, ...rest } = message
+          return rest
+        }
+
+        return {
+          ...message,
+          metadata,
+        }
+      })
+
       const conversationData = {
         // Basic data (backwards compatible)
         modelId,
         timestamp: new Date().toISOString(),
-        messages,
+        messages: sanitizedMessages,
         
         // Enhanced context (new)
         formatVersion: "1.0.0",
