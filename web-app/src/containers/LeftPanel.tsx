@@ -213,7 +213,7 @@ const LeftPanel = () => {
   const createThread = useThreads((state) => state.createThread)
   const setCurrentThreadId = useThreads((state) => state.setCurrentThreadId)
   const { selectedModel, selectedProvider, getProviderByName } = useModelProvider()
-  const { currentAssistant, assistants } = useAssistant()
+  const { currentAssistant, assistants, addAssistant, setCurrentAssistant } = useAssistant()
   const { setMessages } = useMessages()
   const serviceHub = useServiceHub()
 
@@ -348,10 +348,16 @@ const LeftPanel = () => {
         if (!assistantExists) {
           try {
             await serviceHub.assistants().createAssistant(assistantFromDump)
+            addAssistant(assistantFromDump)
           } catch (error) {
             console.error('Failed to recreate assistant from dump:', error)
           }
         }
+        const updatedAssistant =
+          useAssistant.getState().assistants.find(
+            (assistant) => assistant.id === assistantFromDump.id
+          ) || assistantFromDump
+        setCurrentAssistant(updatedAssistant)
       }
 
       const providerName = selectedProvider || provider.provider
