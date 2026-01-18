@@ -14,6 +14,8 @@ pub struct SessionInfo {
     pub api_key: String,
     #[serde(default)]
     pub mmproj_path: Option<String>,
+    #[serde(default)]
+    pub runtime_args: Option<Vec<String>>,
 }
 
 pub struct LLamaBackendSession {

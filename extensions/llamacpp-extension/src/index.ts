@@ -1451,9 +1451,12 @@ export default class llamacpp_extension extends AIEngine {
       })
   }
 
-  override async load(
+  override   async load(
     modelId: string,
-    overrideSettings?: Partial<LlamacppConfig>,
+    overrideSettings?: Partial<LlamacppConfig> & {
+      runtimeArgs?: string[]
+      runtimeContext?: { modelRelPath?: string | null; mmprojRelPath?: string | null }
+    },
     isEmbedding: boolean = false
   ): Promise<SessionInfo> {
     const sInfo = await this.findSessionByModel(modelId)
@@ -1533,7 +1536,9 @@ export default class llamacpp_extension extends AIEngine {
     }
 
     const envs: Record<string, string> = {}
-    const cfg = { ...this.config, ...(overrideSettings ?? {}) }
+    const { runtimeArgs, runtimeContext, ...settingsOverride } =
+      overrideSettings ?? {}
+    const cfg = { ...this.config, ...(settingsOverride ?? {}) }
     const [version, backend] = cfg.version_backend.split('/')
 
     if (!version || !backend) {
@@ -1584,6 +1589,28 @@ export default class llamacpp_extension extends AIEngine {
     const backendPath = await getBackendExePath(backend, version)
 
     try {
+      const runtimeArgsForLoad = runtimeArgs ? [...runtimeArgs] : undefined
+      if (runtimeArgsForLoad?.length) {
+        if (runtimeContext?.modelRelPath) {
+          runtimeArgsForLoad.push('-m')
+          runtimeArgsForLoad.push(
+            await joinPath([janDataFolderPath, runtimeContext.modelRelPath])
+          )
+        }
+        if (runtimeContext?.mmprojRelPath) {
+          runtimeArgsForLoad.push('--mmproj')
+          runtimeArgsForLoad.push(
+            await joinPath([janDataFolderPath, runtimeContext.mmprojRelPath])
+          )
+        }
+        runtimeArgsForLoad.push('--slot-save-path')
+        runtimeArgsForLoad.push(await joinPath([janDataFolderPath, 'dumps']))
+        runtimeArgsForLoad.push('-a')
+        runtimeArgsForLoad.push(modelId)
+        runtimeArgsForLoad.push('--port')
+        runtimeArgsForLoad.push(port.toString())
+      }
+
       const sInfo = await loadLlamaModel(
         backendPath,
         modelId,
@@ -1593,7 +1620,8 @@ export default class llamacpp_extension extends AIEngine {
         envs,
         mmprojPath,
         isEmbedding,
-        Number(this.timeout)
+        Number(this.timeout),
+        runtimeArgsForLoad
       )
       return sInfo
     } catch (error) {
@@ -2662,6 +2690,11 @@ export default class llamacpp_extension extends AIEngine {
         }
       })
 
+      const sessionInfo = await this.findSessionByModel(modelId)
+      const runtimeContext = sessionInfo
+        ? await this.buildRuntimeContext(sessionInfo)
+        : null
+
       const conversationData = {
         // Basic data (backwards compatible)
         modelId,
@@ -2669,9 +2702,10 @@ export default class llamacpp_extension extends AIEngine {
         messages: sanitizedMessages,
         
         // Enhanced context (new)
-        formatVersion: "1.0.0",
+        formatVersion: "1.1.0",
         assistantContext,
-        inferenceContext
+        inferenceContext,
+        runtimeContext
       }
 
       await fs.writeFileSync(messagesPath, JSON.stringify(conversationData, null, 2))
@@ -2705,6 +2739,11 @@ export default class llamacpp_extension extends AIEngine {
       inferenceContext?: any;
     };
     slotId?: number;
+    runtimeContext?: {
+      args: string[]
+      modelRelPath: string | null
+      mmprojRelPath: string | null
+    } | null
   }> {
     try {
       // First restore the conversation messages
@@ -2721,6 +2760,16 @@ export default class llamacpp_extension extends AIEngine {
 
       if (!conversationData.messages) {
         throw new Error(`Invalid conversation dump format: ${safeFilename}.json`)
+      }
+
+      const runtimeContext = conversationData.runtimeContext ?? null
+      if (!runtimeContext) {
+        logger.warn(
+          `Conversation dump ${safeFilename} missing runtime settings; using current defaults.`
+        )
+        logger.warn(
+          'After restoring, verify the model behaves correctly and re-save this dump to capture runtime settings.'
+        )
       }
 
       let contextRestored = false
@@ -2802,6 +2851,7 @@ export default class llamacpp_extension extends AIEngine {
           inferenceContext: conversationData.inferenceContext,
         },
         slotId: restoredSlotId,
+        runtimeContext,
       }
 
     } catch (error) {
@@ -2834,6 +2884,89 @@ export default class llamacpp_extension extends AIEngine {
     } catch (error) {
       logger.error(`Failed to list conversation dumps: ${error}`)
       return []
+    }
+  }
+
+  async readConversationDump(filename: string): Promise<{
+    messages: ThreadMessage[]
+    assistantContext?: any
+    inferenceContext?: any
+    runtimeContext?: {
+      args: string[]
+      modelRelPath: string | null
+      mmprojRelPath: string | null
+    } | null
+  }> {
+    const safeFilename = await this.normalizeDumpName(filename)
+    const janDataFolderPath = await getJanDataFolderPath()
+    const dumpsDir = await joinPath([janDataFolderPath, 'dumps'])
+    const messagesPath = await joinPath([dumpsDir, `${safeFilename}.json`])
+
+    if (!(await fs.existsSync(messagesPath))) {
+      throw new Error(`Conversation dump not found: ${safeFilename}.json`)
+    }
+
+    const conversationData = JSON.parse(await fs.readFileSync(messagesPath))
+    if (!conversationData.messages) {
+      throw new Error(`Invalid conversation dump format: ${safeFilename}.json`)
+    }
+
+    return {
+      messages: conversationData.messages,
+      assistantContext: conversationData.assistantContext,
+      inferenceContext: conversationData.inferenceContext,
+      runtimeContext: conversationData.runtimeContext ?? null,
+    }
+  }
+
+  private async buildRuntimeContext(sessionInfo: SessionInfo) {
+    if (!sessionInfo.runtime_args?.length) return null
+
+    const janDataFolderPath = await getJanDataFolderPath()
+    const normalizedDataPath = janDataFolderPath.replace(/\\/g, '/')
+
+    let modelRelPath: string | null = null
+    let mmprojRelPath: string | null = null
+    const args: string[] = []
+
+    for (let i = 0; i < sessionInfo.runtime_args.length; i += 1) {
+      const arg = sessionInfo.runtime_args[i]
+      if (arg === '-m') {
+        const modelPath = sessionInfo.runtime_args[i + 1]
+        if (modelPath) {
+          modelRelPath = modelPath
+            .replace(/\\/g, '/')
+            .replace(normalizedDataPath, '')
+            .replace(/^\//, '')
+        }
+        i += 1
+        continue
+      }
+
+      if (arg === '--mmproj') {
+        const mmprojPath = sessionInfo.runtime_args[i + 1]
+        if (mmprojPath) {
+          mmprojRelPath = mmprojPath
+            .replace(/\\/g, '/')
+            .replace(normalizedDataPath, '')
+            .replace(/^\//, '')
+        }
+        i += 1
+        continue
+      }
+
+      if (arg === '--slot-save-path' || arg === '--port' || arg === '-a') {
+        i += 1
+        continue
+      }
+
+      args.push(arg)
+    }
+
+    return {
+      args,
+      modelRelPath,
+      mmprojRelPath,
     }
   }
 

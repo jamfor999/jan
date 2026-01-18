@@ -130,6 +130,11 @@ endif
 build: install-and-build install-rust-targets
 	yarn build
 
+# Build frontend + app bundle without rebuilding llama.cpp
+build-frontend: install-and-build install-rust-targets
+	@echo "Building Jan (frontend only)..."
+	yarn build
+
 # ============================================================================
 # Complete Build with Local llama.cpp (single command)
 # ============================================================================

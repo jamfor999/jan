@@ -141,7 +141,11 @@ export interface ModelsService {
   stopAllModels(): Promise<void>
   startModel(
     provider: ProviderObject,
-    model: string
+    model: string,
+    options?: {
+      runtimeArgs?: string[]
+      runtimeContext?: { modelRelPath?: string | null; mmprojRelPath?: string | null }
+    }
   ): Promise<SessionInfo | undefined>
   isToolSupported(modelId: string): Promise<boolean>
   checkMmprojExistsAndUpdateOffloadMMprojSetting(

@@ -50,6 +50,7 @@ pub async fn load_llama_model<R: Runtime>(
     mmproj_path: Option<String>,
     is_embedding: bool,
     timeout: u64,
+    runtime_args: Option<Vec<String>>,
 ) -> ServerResult<SessionInfo> {
     let state: State<LlamacppState> = app_handle.state();
     let mut process_map = state.llama_server_process.lock().await;
@@ -68,12 +69,56 @@ pub async fn load_llama_model<R: Runtime>(
     let bin_path = validate_binary_path(backend_path)?;
 
     // Build arguments using the ArgumentBuilder
-    let builder = ArgumentBuilder::new(config.clone(), is_embedding, jan_data_folder_path)
+    let builder = ArgumentBuilder::new(config.clone(), is_embedding, jan_data_folder_path.clone())
         .map_err(|e| ServerError::InvalidArgument(e))?;
 
-    let mut args = builder.build(&model_id, &model_path, port, mmproj_path.clone());
+    let mut args = if let Some(runtime_args) = runtime_args {
+        runtime_args
+    } else {
+        builder.build(&model_id, &model_path, port, mmproj_path.clone())
+    };
+
+    let data_folder_path = std::path::Path::new(&jan_data_folder_path);
+    let slot_save_path = data_folder_path.join("dumps");
+    let model_rel_path = std::path::Path::new(&model_path)
+        .strip_prefix(data_folder_path)
+        .unwrap_or(std::path::Path::new(&model_path));
+    let resolved_model_path = data_folder_path.join(model_rel_path);
+
+    let mut rebuilt_args = Vec::new();
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "-m" => {
+                iter.next();
+                rebuilt_args.push("-m".to_string());
+                rebuilt_args.push(resolved_model_path.to_string_lossy().to_string());
+            }
+            "--mmproj" => {
+                let mmproj = iter.next();
+                if let Some(mmproj) = mmproj {
+                    let mmproj_path = std::path::Path::new(&mmproj);
+                    let rel_path = mmproj_path
+                        .strip_prefix(data_folder_path)
+                        .unwrap_or(mmproj_path);
+                    rebuilt_args.push("--mmproj".to_string());
+                    rebuilt_args.push(data_folder_path.join(rel_path).to_string_lossy().to_string());
+                }
+            }
+            "--slot-save-path" => {
+                iter.next();
+                rebuilt_args.push("--slot-save-path".to_string());
+                rebuilt_args.push(slot_save_path.to_string_lossy().to_string());
+            }
+            other => rebuilt_args.push(other.to_string()),
+        }
+    }
+
+    let mut args = rebuilt_args;
 
     log::info!("Generated arguments: {:?}", args);
+
+    let runtime_args = args.clone();
 
     // Validate paths
     let model_path_pb = validate_model_path(&mut args)?;
@@ -273,6 +318,7 @@ pub async fn load_llama_model<R: Runtime>(
         is_embedding: is_embedding,
         api_key: api_key,
         mmproj_path: mmproj_path_string,
+        runtime_args: Some(runtime_args),
     };
 
     // Insert session info to process_map

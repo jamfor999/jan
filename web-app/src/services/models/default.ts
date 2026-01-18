@@ -336,7 +336,11 @@ export class DefaultModelsService implements ModelsService {
 
   async startModel(
     provider: ProviderObject,
-    model: string
+    model: string,
+    options?: {
+      runtimeArgs?: string[]
+      runtimeContext?: { modelRelPath?: string | null; mmprojRelPath?: string | null }
+    }
   ): Promise<SessionInfo | undefined> {
     const engine = this.getEngine(provider.provider)
     if (!engine) return undefined
@@ -365,7 +369,7 @@ export class DefaultModelsService implements ModelsService {
         )
       : undefined
 
-    return engine.load(model, settings).catch((error) => {
+    return engine.load(model, { ...settings, ...options }).catch((error) => {
       console.error(
         `Failed to start model ${model} for provider ${provider.provider}:`,
         error

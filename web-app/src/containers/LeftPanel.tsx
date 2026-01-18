@@ -67,6 +67,16 @@ import { ThreadMessage } from '@janhq/core'
 interface LlamacppKvCacheExtension {
   listConversationDumps(): Promise<string[]>
   getIdleSlot(modelId: string): Promise<number>
+  readConversationDump(filename: string): Promise<{
+    messages: ThreadMessage[]
+    assistantContext?: any
+    inferenceContext?: any
+    runtimeContext?: {
+      args: string[]
+      modelRelPath: string | null
+      mmprojRelPath: string | null
+    } | null
+  }>
   restoreConversationDump(
     modelId: string,
     filename: string,
@@ -78,8 +88,14 @@ interface LlamacppKvCacheExtension {
     driftDetected: boolean
     restoredContext?: any
     slotId?: number
+    runtimeContext?: {
+      args: string[]
+      modelRelPath: string | null
+      mmprojRelPath: string | null
+    } | null
   }>
 }
+
 
 const mainMenus = [
   {
@@ -322,6 +338,22 @@ const LeftPanel = () => {
         return
       }
 
+      const dumpData = await extension.readConversationDump(restoreFile)
+      const assistantFromDump = dumpData?.assistantContext
+
+      if (assistantFromDump?.id) {
+        const assistantExists = assistants.some(
+          (assistant) => assistant.id === assistantFromDump.id
+        )
+        if (!assistantExists) {
+          try {
+            await serviceHub.assistants().createAssistant(assistantFromDump)
+          } catch (error) {
+            console.error('Failed to recreate assistant from dump:', error)
+          }
+        }
+      }
+
       const providerName = selectedProvider || provider.provider
       const newThread = await createThread(
         {
@@ -329,11 +361,20 @@ const LeftPanel = () => {
           provider: providerName,
         },
         restoreFile,
-        assistants.find((assistant) => assistant.id === currentAssistant?.id) ||
+        assistantFromDump ||
+          assistants.find((assistant) => assistant.id === currentAssistant?.id) ||
           assistants[0]
       )
 
-      await serviceHub.models().startModel(provider, modelId)
+      await serviceHub.models().startModel(provider, modelId, {
+        runtimeArgs: dumpData.runtimeContext?.args,
+        runtimeContext: dumpData.runtimeContext
+          ? {
+              modelRelPath: dumpData.runtimeContext.modelRelPath,
+              mmprojRelPath: dumpData.runtimeContext.mmprojRelPath,
+            }
+          : undefined,
+      })
 
       const idleSlotId = await extension.getIdleSlot(modelId)
       const restoreResult = await extension.restoreConversationDump(
@@ -342,6 +383,7 @@ const LeftPanel = () => {
         newThread.id,
         idleSlotId
       )
+
 
       if (restoreResult?.messages?.length) {
         const restoredMessages = (restoreResult.messages as ThreadMessage[]).map(
@@ -361,7 +403,13 @@ const LeftPanel = () => {
       setCurrentThreadId(newThread.id)
       navigate({ to: route.threadsDetail, params: { threadId: newThread.id } })
 
-      if (restoreResult?.contextRestored) {
+      if (!dumpData.runtimeContext) {
+        toast.warning(
+          t(
+            'This dump was created before runtime settings were saved. Please verify settings and re-save after testing.'
+          )
+        )
+      } else if (restoreResult?.contextRestored) {
         toast.warning(
           t(
             'Conversation restored and assistant settings were updated to match the saved context'
@@ -374,8 +422,9 @@ const LeftPanel = () => {
       setRestoreDialogOpen(false)
       setConfirmRestoreOpen(false)
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
       console.error('Failed to restore conversation:', error)
-      toast.error(t('Failed to restore conversation'))
+      toast.error(`${t('Failed to restore conversation')}: ${message}`)
     } finally {
       setRestoreLoading(false)
     }

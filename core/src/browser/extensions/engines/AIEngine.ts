@@ -186,6 +186,7 @@ export interface SessionInfo {
   is_embedding: boolean
   api_key: string
   mmproj_path?: string
+  runtime_args?: string[]
 }
 
 export interface UnloadResult {

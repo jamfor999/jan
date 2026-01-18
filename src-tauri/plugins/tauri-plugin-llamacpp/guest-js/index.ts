@@ -91,7 +91,8 @@ export async function loadLlamaModel(
   envs: Record<string, string>,
   mmprojPath?: string,
   isEmbedding: boolean = false,
-  timeout: number = 600
+  timeout: number = 600,
+  runtimeArgs?: string[]
 ): Promise<SessionInfo> {
   const config = normalizeLlamacppConfig(cfg)
   const payload = {
@@ -104,6 +105,7 @@ export async function loadLlamaModel(
     mmprojPath,
     isEmbedding,
     timeout,
+    runtimeArgs,
   }
   console.log('Tauri invoke payload:', JSON.stringify(payload, null, 2))
   return await invoke('plugin:llamacpp|load_llama_model', payload)
